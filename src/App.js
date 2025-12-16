@@ -114,7 +114,7 @@ export default function App() {
   }, []);
   // -------------------------------------
 
-  // ✅ CHANGED: Removed setTimeout for Instant Loading
+  // ✅ INSTANT LOADING (No setTimeout)
   useEffect(() => {
     if (!app) {
       try {
@@ -771,7 +771,7 @@ function AdminScreen({ isReady, onBack }) {
   );
 }
 
-// --- SCREEN 4: SCANNER (Updated with 3-minute Buffer & Instant Check) ---
+// --- SCREEN 4: SCANNER (Duplicate Check + 3 Minute Buffer) ---
 function ScannerScreen({ token, locationId, isReady, user }) {
   const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
@@ -794,7 +794,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       new Date().getTimezoneOffset(),
       navigator.hardwareConcurrency || "unknown",
     ];
-
     const str = components.join("||");
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
@@ -807,11 +806,9 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
   useEffect(() => {
     if (!isReady || !db) return;
-
     const identifyDevice = async () => {
       setStatus("initializing");
       const STORAGE_KEY = "secure_user_badge";
-
       try {
         let storedBadge = localStorage.getItem(STORAGE_KEY);
         const fp = await generateNativeFingerprint();
@@ -821,10 +818,8 @@ function ScannerScreen({ token, locationId, isReady, user }) {
           setDeviceId(storedBadge);
           const deviceRef = doc(db, DEVICES_COLLECTION, storedBadge);
           const deviceSnap = await getDoc(deviceRef);
-
           if (deviceSnap.exists()) {
-            const data = deviceSnap.data();
-            setUserEmail(data.email);
+            setUserEmail(deviceSnap.data().email);
             setShowPermissionModal(true);
           } else {
             setShowEmailModal(true);
@@ -839,7 +834,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         setStatus("error");
       }
     };
-
     identifyDevice();
   }, [isReady]);
 
@@ -849,10 +843,8 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       alert("Please enter a valid email address.");
       return;
     }
-
     setIsRecovering(true);
     const STORAGE_KEY = "secure_user_badge";
-
     try {
       const q = query(
         collection(db, DEVICES_COLLECTION),
@@ -860,30 +852,23 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         limit(1)
       );
       const querySnapshot = await getDocs(q);
-
       let finalBadgeId = "";
-
       if (!querySnapshot.empty) {
-        const existingDoc = querySnapshot.docs[0];
-        finalBadgeId = existingDoc.id;
-        console.log("Recovered Old ID:", finalBadgeId);
+        finalBadgeId = querySnapshot.docs[0].id;
       } else {
         finalBadgeId =
           "badge_" +
           Math.random().toString(36).substr(2, 9) +
           Date.now().toString(36);
-
         await setDoc(doc(db, DEVICES_COLLECTION, finalBadgeId), {
           email: emailInput,
           fingerprint: fingerprint,
           firstSeen: serverTimestamp(),
         });
       }
-
       localStorage.setItem(STORAGE_KEY, finalBadgeId);
       setDeviceId(finalBadgeId);
       setUserEmail(emailInput);
-
       setShowEmailModal(false);
       setShowPermissionModal(true);
     } catch (err) {
@@ -897,13 +882,11 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   const confirmAndCheckIn = async () => {
     setShowPermissionModal(false);
     setStatus("locating");
-
     if (!navigator.geolocation) {
       setErrorMsg("Geolocation not supported.");
       setStatus("error");
       return;
     }
-
     navigator.geolocation.getCurrentPosition(
       (pos) => saveCheckIn(pos.coords),
       (err) => {
@@ -916,6 +899,27 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
   const saveCheckIn = async (coords) => {
     setStatus("saving");
+
+    // --- 1. DUPLICATE CHECK (PREVENTS REFRESH = NEW TICKET) ---
+    try {
+      const duplicateQ = query(
+        collection(db, COLLECTION_NAME),
+        where("deviceId", "==", deviceId),
+        where("tokenUsed", "==", token)
+      );
+      const duplicateSnap = await getDocs(duplicateQ);
+
+      if (!duplicateSnap.empty) {
+        const existingData = duplicateSnap.docs[0].data();
+        console.log("Restoring existing session:", existingData.queueNumber);
+        setMyQueueNumber(existingData.queueNumber);
+        setStatus("success");
+        return;
+      }
+    } catch (e) {
+      console.warn("Duplicate check warning:", e);
+    }
+    // -------------------------------------------------------
 
     const MAX_RETRIES = 5;
     let attempt = 0;
@@ -935,9 +939,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     );
     const tokenTimestamp = parseInt(token.split("-")[1]);
 
-    // ✅ CHANGED: Tuned for "Regular 3 Minute Buffer" + Clock Safety
-    // Past Buffer: 8 windows (8 * 30s = 4 mins) -> Safe for slow typing.
-    // Future Buffer: 2 windows (2 * 30s = 1 min) -> Fixes "1 second remaining" bug.
+    // ✅ BUFFERS: 8 windows Past (4 mins) + 2 windows Future (1 min)
     const PAST_BUFFER = 8;
     const FUTURE_BUFFER = 2;
 
@@ -947,7 +949,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       tokenTimestamp <= currentTimestamp + FUTURE_BUFFER;
 
     if (!isValid) {
-      console.log("Debug: Token", tokenTimestamp, "Current", currentTimestamp);
+      console.log("Token:", tokenTimestamp, "Current:", currentTimestamp);
       setErrorMsg("QR Code Invalid. Please refresh and scan again.");
       setStatus("error");
       return;
@@ -960,13 +962,11 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     while (attempt < MAX_RETRIES && !success) {
       try {
         attempt++;
-
         const assignedQueueNumber = await runTransaction(
           db,
           async (transaction) => {
             const counterDoc = await transaction.get(counterRef);
             let nextNum = 1;
-
             if (counterDoc.exists()) {
               const data = counterDoc.data();
               if (data.date === todayStr) {
@@ -975,13 +975,11 @@ function ScannerScreen({ token, locationId, isReady, user }) {
                 nextNum = 1;
               }
             }
-
             transaction.set(counterRef, {
               date: todayStr,
               count: nextNum,
               locationId: locationId,
             });
-
             transaction.set(newCheckInRef, {
               userName: userEmail || "Anonymous",
               locationId: locationId,
@@ -997,19 +995,15 @@ function ScannerScreen({ token, locationId, isReady, user }) {
               queueNumber: nextNum,
               timestamp: serverTimestamp(),
             });
-
             return nextNum;
           }
         );
-
         setMyQueueNumber(assignedQueueNumber);
         setStatus("success");
         success = true;
       } catch (err) {
         console.warn(`Attempt ${attempt} failed:`, err);
-
         if (attempt >= MAX_RETRIES) {
-          console.error("Max retries reached", err);
           setErrorMsg("System busy. Please try scanning again.");
           setStatus("error");
         } else {
@@ -1049,7 +1043,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
   return (
     <div className="min-h-screen bg-white p-6 flex flex-col items-center justify-center">
-      {/* --- MODAL 1: FIRST TIME EMAIL ENTRY --- */}
       {showEmailModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
           <div className="bg-white p-8 rounded-2xl max-w-sm w-full shadow-2xl">
@@ -1090,7 +1083,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         </div>
       )}
 
-      {/* --- MODAL 2: PERMISSION & CHECK-IN --- */}
       {showPermissionModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
           <div className="bg-white p-6 rounded-2xl max-w-sm w-full shadow-2xl">
