@@ -54,7 +54,10 @@ const firebaseConfig = {
 const COLLECTION_NAME = "checkins";
 const COUNTER_COLLECTION = "counters";
 const DEVICES_COLLECTION = "registered_devices";
-const TOKEN_VALIDITY_SECONDS = 50;
+
+// ✅ CHANGED: QR Code refreshes every 30 seconds
+const TOKEN_VALIDITY_SECONDS = 30;
+
 const LOCATIONS = Array.from({ length: 30 }, (_, i) => `QCA${i + 1}`);
 
 // Global refs
@@ -87,9 +90,8 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [isFirebaseReady, setIsFirebaseReady] = useState(false);
 
-  // --- MODIFICATION: HIDE SANDBOX UI ---
+  // --- HIDE SANDBOX UI ---
   // This effect injects CSS to hide the "Open in CodeSandbox" button
-  // and other overlay elements that might appear in the preview.
   useEffect(() => {
     const styleId = "sandbox-hider-styles";
     if (!document.getElementById(styleId)) {
@@ -315,17 +317,7 @@ function KioskScreen({ isReady, locationId }) {
       setToken(newToken);
       setTimeLeft(TOKEN_VALIDITY_SECONDS);
 
-      // --- MODIFIED URL LOGIC ---
-      // We attempt to get the cleanest possible URL for the QR code
       let currentUrl = window.location.href.split("?")[0];
-
-      // If we are in the editor, try to suggest the clean URL if possible
-      // This helps avoid the "Trust" screen if the user scans a .csb.app URL
-      if (currentUrl.includes("codesandbox.io/s/")) {
-        // Note: We can't automatically guess the .csb.app URL reliably from inside
-        // the iframe without custom config, but we use the current href as best effort.
-      }
-
       const qrParams = `view=scanner&token=${newToken}&locationId=${locationId}`;
 
       // Detect Preview
@@ -965,10 +957,15 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       Date.now() / 1000 / TOKEN_VALIDITY_SECONDS
     );
     const tokenTimestamp = parseInt(token.split("-")[1]);
+
+    // ✅ CHANGED: 6 windows * 30s = 180s (3 Minutes Buffer)
+    // This allows a token to be valid for 3 minutes from generation
+    const BUFFER_WINDOWS = 6;
+
     const isValid =
       token.startsWith("secure-") &&
-      (tokenTimestamp === currentTimestamp ||
-        tokenTimestamp === currentTimestamp - 1);
+      tokenTimestamp >= currentTimestamp - BUFFER_WINDOWS &&
+      tokenTimestamp <= currentTimestamp + 1;
 
     if (!isValid) {
       setErrorMsg("QR Code Expired. Please scan again.");
