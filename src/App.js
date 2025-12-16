@@ -771,7 +771,7 @@ function AdminScreen({ isReady, onBack }) {
   );
 }
 
-// --- SCREEN 4: SCANNER (Duplicate Check + 3 Minute Buffer) ---
+// --- SCREEN 4: SCANNER (Duplicate Check + 3 Minute Buffer + Domain Validation) ---
 function ScannerScreen({ token, locationId, isReady, user }) {
   const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
@@ -837,12 +837,30 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     identifyDevice();
   }, [isReady]);
 
+  // ✅ VALIDATION LOGIC: RESTRICTED DOMAINS
   const handleEmailSubmit = async (e) => {
     e.preventDefault();
+
+    // 1. Basic format check
     if (!emailInput.includes("@") || emailInput.length < 5) {
       alert("Please enter a valid email address.");
       return;
     }
+
+    // 2. Strict Domain Check
+    // Regex allows:
+    // - gmail, outlook, speedo-delivery, topdeliveryeg
+    // - ONLY ending in .com or .art
+    const emailRegex =
+      /^[\w-\.]+@(gmail|outlook|speedo-delivery|topdeliveryeg)\.(com|art)$/i;
+
+    if (!emailRegex.test(emailInput)) {
+      alert(
+        "Access Denied: Please use a valid company email (e.g., @speedo-delivery.com, @topdeliveryeg.art, etc)."
+      );
+      return;
+    }
+
     setIsRecovering(true);
     const STORAGE_KEY = "secure_user_badge";
     try {
