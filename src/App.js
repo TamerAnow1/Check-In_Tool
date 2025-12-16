@@ -55,7 +55,7 @@ const COLLECTION_NAME = "checkins";
 const COUNTER_COLLECTION = "counters";
 const DEVICES_COLLECTION = "registered_devices";
 
-// ✅ CHANGED: QR Code refreshes every 30 seconds
+// ✅ 30-Second QR Refresh
 const TOKEN_VALIDITY_SECONDS = 30;
 
 const LOCATIONS = Array.from({ length: 30 }, (_, i) => `QCA${i + 1}`);
@@ -91,7 +91,6 @@ export default function App() {
   const [isFirebaseReady, setIsFirebaseReady] = useState(false);
 
   // --- HIDE SANDBOX UI ---
-  // This effect injects CSS to hide the "Open in CodeSandbox" button
   useEffect(() => {
     const styleId = "sandbox-hider-styles";
     if (!document.getElementById(styleId)) {
@@ -115,29 +114,26 @@ export default function App() {
   }, []);
   // -------------------------------------
 
+  // ✅ CHANGED: Removed setTimeout for Instant Loading
   useEffect(() => {
-    const timer = setTimeout(() => {
-      if (!app) {
-        try {
-          app = initializeApp(firebaseConfig);
-          db = getFirestore(app);
-          auth = getAuth(app);
+    if (!app) {
+      try {
+        app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        auth = getAuth(app);
 
-          signInAnonymously(auth).catch((err) =>
-            console.error("Auth failed", err)
-          );
+        signInAnonymously(auth).catch((err) =>
+          console.error("Auth failed", err)
+        );
 
-          onAuthStateChanged(auth, (u) => {
-            setUser(u);
-            setIsFirebaseReady(true);
-          });
-        } catch (e) {
-          console.error("Init Error", e);
-        }
+        onAuthStateChanged(auth, (u) => {
+          setUser(u);
+          setIsFirebaseReady(true);
+        });
+      } catch (e) {
+        console.error("Init Error", e);
       }
-    }, 500);
-
-    return () => clearTimeout(timer);
+    }
   }, []);
 
   const handleModeSelect = (selectedMode, locationId = null) => {
@@ -775,26 +771,20 @@ function AdminScreen({ isReady, onBack }) {
   );
 }
 
-// --- SCREEN 4: SCANNER (Final "Resurrection" Logic) ---
+// --- SCREEN 4: SCANNER (Updated with 3-minute Buffer & Instant Check) ---
 function ScannerScreen({ token, locationId, isReady, user }) {
   const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
-  // 'deviceId' = Random Badge (Unique & Persistent after recovery)
   const [deviceId, setDeviceId] = useState("");
-  // 'fingerprint' = Hardware Specs (Metadata)
   const [fingerprint, setFingerprint] = useState("");
   const [userEmail, setUserEmail] = useState("");
   const [myQueueNumber, setMyQueueNumber] = useState(null);
 
-  // Modals Control
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [showPermissionModal, setShowPermissionModal] = useState(false);
   const [isRecovering, setIsRecovering] = useState(false);
-
-  // Form input
   const [emailInput, setEmailInput] = useState("");
 
-  // ✅ HELPER: Generate Native Fingerprint (Metadata only)
   const generateNativeFingerprint = async () => {
     const components = [
       navigator.userAgent,
@@ -815,7 +805,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     return "fp_" + Math.abs(hash);
   };
 
-  // ✅ STEP 1: INITIALIZE (Check Storage & DB)
   useEffect(() => {
     if (!isReady || !db) return;
 
@@ -824,13 +813,11 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       const STORAGE_KEY = "secure_user_badge";
 
       try {
-        // 1. Check Local Storage
         let storedBadge = localStorage.getItem(STORAGE_KEY);
         const fp = await generateNativeFingerprint();
         setFingerprint(fp);
 
         if (storedBadge) {
-          // A) Badge Found: Check if it's valid in DB
           setDeviceId(storedBadge);
           const deviceRef = doc(db, DEVICES_COLLECTION, storedBadge);
           const deviceSnap = await getDoc(deviceRef);
@@ -840,12 +827,9 @@ function ScannerScreen({ token, locationId, isReady, user }) {
             setUserEmail(data.email);
             setShowPermissionModal(true);
           } else {
-            // Found a badge, but not in DB? Weird. Treat as new.
             setShowEmailModal(true);
           }
         } else {
-          // B) No Badge (Cache Cleared or New User)
-          // Do NOT generate a new one yet. Ask for Email first.
           setShowEmailModal(true);
         }
         setStatus("idle");
@@ -859,7 +843,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     identifyDevice();
   }, [isReady]);
 
-  // ✅ STEP 2: EMAIL SUBMISSION (The Recovery Logic)
   const handleEmailSubmit = async (e) => {
     e.preventDefault();
     if (!emailInput.includes("@") || emailInput.length < 5) {
@@ -871,7 +854,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     const STORAGE_KEY = "secure_user_badge";
 
     try {
-      // 1. Search for existing user by Email
       const q = query(
         collection(db, DEVICES_COLLECTION),
         where("email", "==", emailInput),
@@ -882,18 +864,15 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       let finalBadgeId = "";
 
       if (!querySnapshot.empty) {
-        // --- CASE 1: USER EXISTS (RECOVERY) ---
         const existingDoc = querySnapshot.docs[0];
-        finalBadgeId = existingDoc.id; // Recover the OLD ID
+        finalBadgeId = existingDoc.id;
         console.log("Recovered Old ID:", finalBadgeId);
       } else {
-        // --- CASE 2: NEW USER (GENERATION) ---
         finalBadgeId =
           "badge_" +
           Math.random().toString(36).substr(2, 9) +
           Date.now().toString(36);
 
-        // Save new user to DB
         await setDoc(doc(db, DEVICES_COLLECTION, finalBadgeId), {
           email: emailInput,
           fingerprint: fingerprint,
@@ -901,7 +880,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         });
       }
 
-      // 2. Save ID to Local Storage (Resurrect persistence)
       localStorage.setItem(STORAGE_KEY, finalBadgeId);
       setDeviceId(finalBadgeId);
       setUserEmail(emailInput);
@@ -936,7 +914,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     );
   };
 
-  // ✅ STEP 3: TRANSACTION CHECK-IN
   const saveCheckIn = async (coords) => {
     setStatus("saving");
 
@@ -958,17 +935,20 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     );
     const tokenTimestamp = parseInt(token.split("-")[1]);
 
-    // ✅ CHANGED: 6 windows * 30s = 180s (3 Minutes Buffer)
-    // This allows a token to be valid for 3 minutes from generation
-    const BUFFER_WINDOWS = 6;
+    // ✅ CHANGED: Tuned for "Regular 3 Minute Buffer" + Clock Safety
+    // Past Buffer: 8 windows (8 * 30s = 4 mins) -> Safe for slow typing.
+    // Future Buffer: 2 windows (2 * 30s = 1 min) -> Fixes "1 second remaining" bug.
+    const PAST_BUFFER = 8;
+    const FUTURE_BUFFER = 2;
 
     const isValid =
       token.startsWith("secure-") &&
-      tokenTimestamp >= currentTimestamp - BUFFER_WINDOWS &&
-      tokenTimestamp <= currentTimestamp + 1;
+      tokenTimestamp >= currentTimestamp - PAST_BUFFER &&
+      tokenTimestamp <= currentTimestamp + FUTURE_BUFFER;
 
     if (!isValid) {
-      setErrorMsg("QR Code Expired. Please scan again.");
+      console.log("Debug: Token", tokenTimestamp, "Current", currentTimestamp);
+      setErrorMsg("QR Code Invalid. Please refresh and scan again.");
       setStatus("error");
       return;
     }
@@ -1011,7 +991,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
                 accuracy: coords.accuracy,
               },
               tokenUsed: token,
-              deviceId: deviceId, // This is the PERSISTENT ID
+              deviceId: deviceId,
               fingerprint: fingerprint,
               deviceInfo: navigator.userAgent,
               queueNumber: nextNum,
@@ -1069,7 +1049,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
   return (
     <div className="min-h-screen bg-white p-6 flex flex-col items-center justify-center">
-      {/* --- MODAL 1: FIRST TIME EMAIL ENTRY (WITH RECOVERY LOGIC) --- */}
+      {/* --- MODAL 1: FIRST TIME EMAIL ENTRY --- */}
       {showEmailModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
           <div className="bg-white p-8 rounded-2xl max-w-sm w-full shadow-2xl">
