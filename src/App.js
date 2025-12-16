@@ -15,6 +15,7 @@ import {
   doc,
   setDoc,
   getDoc,
+  updateDoc,
 } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 import {
@@ -37,6 +38,7 @@ import {
   Lock,
   Mail,
   RefreshCw, // Icon for recovery
+  Zap, // Icon for the new Refresh Button
 } from "lucide-react";
 
 // --- CONFIGURATION ---
@@ -54,6 +56,7 @@ const firebaseConfig = {
 const COLLECTION_NAME = "checkins";
 const COUNTER_COLLECTION = "counters";
 const DEVICES_COLLECTION = "registered_devices";
+const SYSTEM_COLLECTION = "system"; // New collection for remote commands
 
 // ✅ 30-Second QR Refresh
 const TOKEN_VALIDITY_SECONDS = 30;
@@ -262,6 +265,32 @@ function KioskScreen({ isReady, locationId }) {
   const [recentScans, setRecentScans] = useState([]);
   const [isUrlValid, setIsUrlValid] = useState(true);
   const [isDownloading, setIsDownloading] = useState(false);
+
+  // Track when this specific Kiosk instance started
+  const [loadTime] = useState(Date.now());
+
+  // ✅ REMOTE REFRESH LISTENER
+  useEffect(() => {
+    if (!isReady || !db) return;
+
+    // Listen to the "global_commands" document
+    const unsub = onSnapshot(
+      doc(db, SYSTEM_COLLECTION, "global_commands"),
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          const refreshTime = data.forceRefreshTimestamp?.toMillis() || 0;
+
+          // If a refresh command was sent AFTER this page loaded -> Reload
+          if (refreshTime > loadTime) {
+            console.log("Remote refresh command received. Reloading...");
+            window.location.reload();
+          }
+        }
+      }
+    );
+    return () => unsub();
+  }, [isReady, loadTime]);
 
   const handleDownloadCSV = async () => {
     if (!isReady || !db) return;
@@ -473,6 +502,9 @@ function AdminScreen({ isReady, onBack }) {
     new Date().toISOString().split("T")[0]
   );
 
+  // New state for refresh button feedback
+  const [isRefreshingKiosks, setIsRefreshingKiosks] = useState(false);
+
   const handleLogin = (e) => {
     e.preventDefault();
     if (passwordInput === "Anowforthewin") {
@@ -480,6 +512,34 @@ function AdminScreen({ isReady, onBack }) {
       setAuthError("");
     } else {
       setAuthError("Incorrect Password");
+    }
+  };
+
+  // ✅ REMOTE REFRESH TRIGGER
+  const handleRemoteRefresh = async () => {
+    if (!db) return;
+    const confirmRef = window.confirm(
+      "Are you sure? This will reload ALL Kiosk screens immediately."
+    );
+    if (!confirmRef) return;
+
+    setIsRefreshingKiosks(true);
+    try {
+      // Update the global command document
+      await setDoc(
+        doc(db, SYSTEM_COLLECTION, "global_commands"),
+        {
+          forceRefreshTimestamp: serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      alert("Refresh Signal Sent! Kiosks will reload in a few seconds.");
+    } catch (e) {
+      console.error("Error triggering refresh:", e);
+      alert("Failed to send signal.");
+    } finally {
+      setIsRefreshingKiosks(false);
     }
   };
 
@@ -630,6 +690,20 @@ function AdminScreen({ isReady, onBack }) {
           </div>
 
           <div className="flex flex-wrap gap-4 w-full md:w-auto items-center">
+            {/* FORCE REFRESH BUTTON */}
+            <button
+              onClick={handleRemoteRefresh}
+              disabled={isRefreshingKiosks}
+              className="flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-sm font-bold shadow-sm transition-colors"
+            >
+              {isRefreshingKiosks ? (
+                <Loader size={16} className="animate-spin mr-2" />
+              ) : (
+                <Zap size={16} className="mr-2" />
+              )}
+              Force Refresh All Kiosks
+            </button>
+
             <div className="flex items-center bg-white px-3 py-2 rounded-lg border border-slate-200">
               <Filter size={16} className="text-slate-400 mr-2" />
               <select
@@ -848,14 +922,13 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     }
 
     // 2. Strict Domain Check
-    // Regex allows:
-    // - gmail, outlook, speedo-delivery, topdeliveryeg
-    // - ONLY ending in .com or .art
     const emailRegex =
       /^[\w-\.]+@(gmail|outlook|speedo-delivery|topdeliveryeg)\.(com|art)$/i;
 
     if (!emailRegex.test(emailInput)) {
-      alert("Access Denied: Please use a valid company email");
+      alert(
+        "Access Denied: Please use a valid company email (e.g., @speedo-delivery.com, @topdeliveryeg.art, etc)."
+      );
       return;
     }
 
