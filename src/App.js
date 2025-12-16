@@ -855,9 +855,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       /^[\w-\.]+@(gmail|outlook|speedo-delivery|topdeliveryeg)\.(com|art)$/i;
 
     if (!emailRegex.test(emailInput)) {
-      alert(
-        "Access Denied: Please use a valid company email (e.g., @speedo-delivery.com, @topdeliveryeg.art, etc)."
-      );
+      alert("Access Denied: Please use a valid company email");
       return;
     }
 
