@@ -257,7 +257,7 @@ function LandingScreen({ onSelect }) {
   );
 }
 
-// --- SCREEN 2: KIOSK ---
+// --- SCREEN 2: KIOSK (Updated with Wake Lock) ---
 function KioskScreen({ isReady, locationId }) {
   const [token, setToken] = useState("");
   const [timeLeft, setTimeLeft] = useState(TOKEN_VALIDITY_SECONDS);
@@ -265,9 +265,44 @@ function KioskScreen({ isReady, locationId }) {
   const [recentScans, setRecentScans] = useState([]);
   const [isUrlValid, setIsUrlValid] = useState(true);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [wakeLockActive, setWakeLockActive] = useState(false); // UI indicator state
 
   // Track when this specific Kiosk instance started
   const [loadTime] = useState(Date.now());
+
+  // ✅ PREVENT SCREEN DIMMING (WAKE LOCK API)
+  useEffect(() => {
+    let wakeLock = null;
+
+    const requestWakeLock = async () => {
+      try {
+        if ("wakeLock" in navigator) {
+          wakeLock = await navigator.wakeLock.request("screen");
+          setWakeLockActive(true);
+          console.log("Wake Lock is active!");
+        }
+      } catch (err) {
+        console.error("Wake Lock failed:", err);
+        setWakeLockActive(false);
+      }
+    };
+
+    // Request on mount
+    requestWakeLock();
+
+    // Re-request if the user switches tabs/minimizes and comes back
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        requestWakeLock();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (wakeLock) wakeLock.release();
+    };
+  }, []);
 
   // ✅ REMOTE REFRESH LISTENER
   useEffect(() => {
@@ -396,6 +431,21 @@ function KioskScreen({ isReady, locationId }) {
       <div className="flex-1 flex flex-col items-center justify-center p-8 border-r border-slate-700 relative">
         <div className="absolute top-6 left-6 bg-blue-600 px-4 py-2 rounded-lg font-bold flex items-center shadow-lg">
           <Building size={18} className="mr-2" /> {locationId}
+        </div>
+
+        {/* Wake Lock Indicator (Optional Visual) */}
+        <div
+          className={`absolute top-6 right-6 px-3 py-1 rounded-full text-xs font-mono flex items-center border ${
+            wakeLockActive
+              ? "bg-green-900/30 border-green-500 text-green-400"
+              : "bg-red-900/30 border-red-500 text-red-400"
+          }`}
+          title={
+            wakeLockActive ? "Screen Keep-Awake Active" : "Screen Sleep Enabled"
+          }
+        >
+          <Zap size={12} className="mr-1" />
+          {wakeLockActive ? "ALWAYS ON" : "NORMAL PWR"}
         </div>
 
         <h2 className="text-2xl font-bold mb-8 tracking-wider">
