@@ -3,9 +3,12 @@ import { initializeApp } from "firebase/app";
 import {
   getFirestore,
   collection,
+  addDoc,
   getDocs,
   serverTimestamp,
   query,
+  orderBy,
+  limit,
   onSnapshot,
   where,
   runTransaction,
@@ -13,15 +16,21 @@ import {
   setDoc,
   getDoc,
   updateDoc,
-  limit,
 } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 import {
+  AlertCircle,
   CheckCircle,
+  MapPin,
+  Smartphone,
+  User,
   Loader,
+  Shield,
   X,
   Info,
   Download,
+  Fingerprint,
+  Ticket,
   Building,
   LayoutDashboard,
   Filter,
@@ -30,8 +39,8 @@ import {
   Mail,
   RefreshCw,
   Zap,
-  Clock, // Icon for timeout
-  AlertTriangle, // Icon for warning
+  LogOut,
+  Maximize, // New Icon for Fullscreen
 } from "lucide-react";
 
 // --- CONFIGURATION ---
@@ -51,9 +60,7 @@ const COUNTER_COLLECTION = "counters";
 const DEVICES_COLLECTION = "registered_devices";
 const SYSTEM_COLLECTION = "system";
 
-// ✅ 30-Second QR Refresh
 const TOKEN_VALIDITY_SECONDS = 30;
-
 const LOCATIONS = Array.from({ length: 30 }, (_, i) => `QCA${i + 1}`);
 
 // Global refs
@@ -196,6 +203,7 @@ function LandingScreen({ onSelect }) {
               <p className="text-sm text-slate-400">Setup a kiosk screen</p>
             </div>
           </div>
+
           <div className="mt-4">
             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
               Select Location
@@ -247,7 +255,7 @@ function LandingScreen({ onSelect }) {
   );
 }
 
-// --- SCREEN 2: KIOSK (With Wake Lock) ---
+// --- SCREEN 2: KIOSK (Visual Updates) ---
 function KioskScreen({ isReady, locationId }) {
   const [token, setToken] = useState("");
   const [timeLeft, setTimeLeft] = useState(TOKEN_VALIDITY_SECONDS);
@@ -258,6 +266,18 @@ function KioskScreen({ isReady, locationId }) {
   const [wakeLockActive, setWakeLockActive] = useState(false);
   const [loadTime] = useState(Date.now());
 
+  // Full Screen Toggle
+  const toggleFullScreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen();
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      }
+    }
+  };
+
+  // Wake Lock
   useEffect(() => {
     let wakeLock = null;
     const requestWakeLock = async () => {
@@ -273,9 +293,7 @@ function KioskScreen({ isReady, locationId }) {
     };
     requestWakeLock();
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        requestWakeLock();
-      }
+      if (document.visibilityState === "visible") requestWakeLock();
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
@@ -284,6 +302,7 @@ function KioskScreen({ isReady, locationId }) {
     };
   }, []);
 
+  // Remote Refresh
   useEffect(() => {
     if (!isReady || !db) return;
     const unsub = onSnapshot(
@@ -292,9 +311,7 @@ function KioskScreen({ isReady, locationId }) {
         if (docSnap.exists()) {
           const data = docSnap.data();
           const refreshTime = data.forceRefreshTimestamp?.toMillis() || 0;
-          if (refreshTime > loadTime) {
-            window.location.reload();
-          }
+          if (refreshTime > loadTime) window.location.reload();
         }
       }
     );
@@ -316,7 +333,9 @@ function KioskScreen({ isReady, locationId }) {
           (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
       );
       const csvContent = [
-        ["Queue Number", "Name", "Date", "Time", "Device ID"].join(","),
+        ["Queue Number", "Name", "Date", "Time", "Device ID", "Status"].join(
+          ","
+        ),
         ...data.map((d) => {
           const dt = d.timestamp ? d.timestamp.toDate() : new Date();
           return [
@@ -325,6 +344,7 @@ function KioskScreen({ isReady, locationId }) {
             dt.toLocaleDateString(),
             dt.toLocaleTimeString(),
             `"${d.deviceId}"`,
+            d.status || "N/A",
           ].join(",");
         }),
       ].join("\n");
@@ -376,11 +396,10 @@ function KioskScreen({ isReady, locationId }) {
       where("locationId", "==", locationId)
     );
     const unsubscribe = onSnapshot(safeQ, (snapshot) => {
-      // Filter out 'abandoned' or 'timeout' users from the Kiosk Feed
-      const allScans = snapshot.docs
-        .map((doc) => ({ id: doc.id, ...doc.data() }))
-        .filter((doc) => doc.status !== "abandoned"); // FILTER HERE
-
+      const allScans = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
       allScans.sort(
         (a, b) =>
           (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
@@ -391,74 +410,89 @@ function KioskScreen({ isReady, locationId }) {
   }, [isReady, locationId]);
 
   return (
-    <div className="flex flex-col md:flex-row h-screen bg-slate-900 text-white">
+    <div className="flex flex-col md:flex-row h-screen bg-slate-900 text-white overflow-hidden">
+      {/* LEFT SIDE: QR CODE */}
       <div className="flex-1 flex flex-col items-center justify-center p-8 border-r border-slate-700 relative">
         <div className="absolute top-6 left-6 bg-blue-600 px-4 py-2 rounded-lg font-bold flex items-center shadow-lg">
           <Building size={18} className="mr-2" /> {locationId}
         </div>
-        <div
-          className={`absolute top-6 right-6 px-3 py-1 rounded-full text-xs font-mono flex items-center border ${
-            wakeLockActive
-              ? "bg-green-900/30 border-green-500 text-green-400"
-              : "bg-red-900/30 border-red-500 text-red-400"
-          }`}
+
+        {/* FULLSCREEN BUTTON */}
+        <button
+          onClick={toggleFullScreen}
+          className="absolute top-6 right-6 bg-slate-800 hover:bg-slate-700 p-2 rounded-full border border-slate-600 transition-colors"
+          title="Enter Full Screen"
         >
-          <Zap size={12} className="mr-1" />
-          {wakeLockActive ? "ALWAYS ON" : "NORMAL PWR"}
-        </div>
-        <h2 className="text-2xl font-bold mb-8 tracking-wider">
+          <Maximize size={20} />
+        </button>
+
+        <h2 className="text-3xl font-bold mb-10 tracking-wider">
           SCAN TO CHECK IN
         </h2>
+
         {!isUrlValid && (
-          <div className="absolute top-20 left-4 right-4 bg-yellow-500/20 border border-yellow-500 text-yellow-100 p-3 rounded-lg text-sm flex items-start gap-2 text-left">
+          <div className="absolute top-24 left-1/2 -translate-x-1/2 bg-yellow-500/20 border border-yellow-500 text-yellow-100 p-3 rounded-lg text-sm flex items-start gap-2 text-left">
             <Info size={18} className="mt-0.5 flex-shrink-0" />
             <div>
               <strong>Preview Mode:</strong> This QR uses a fallback URL.
             </div>
           </div>
         )}
-        <div className="bg-white p-4 rounded-xl shadow-2xl shadow-blue-500/20 w-64 h-64 flex items-center justify-center">
+
+        {/* ✅ UPDATED QR CONTAINER: MUCH LARGER */}
+        <div className="bg-white p-4 rounded-3xl shadow-2xl shadow-blue-500/20 w-[500px] h-[500px] flex items-center justify-center border-[10px] border-white">
           {scanUrl ? (
             <img
-              src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(
+              src={`https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(
                 scanUrl
               )}`}
               alt="Scan this QR code"
               className="w-full h-full object-contain"
             />
           ) : (
-            <Loader className="text-slate-400 animate-spin" />
+            <Loader className="text-slate-400 animate-spin" size={64} />
           )}
         </div>
-        <div className="mt-8 text-center">
-          <div className="text-4xl font-mono font-bold text-blue-400">
+
+        <div className="mt-12 text-center">
+          <div className="text-6xl font-mono font-bold text-blue-400">
             {timeLeft}s
           </div>
-          <p className="text-slate-400 text-sm mt-2">
+          <p className="text-slate-400 text-lg mt-2">
             Code refreshes automatically
           </p>
         </div>
       </div>
-      <div className="w-full md:w-96 bg-slate-800 p-6 overflow-hidden flex flex-col">
-        <div className="flex items-center justify-between mb-6">
-          <h3 className="text-xl font-bold flex items-center">
+
+      {/* RIGHT SIDE: FEED */}
+      <div className="w-full md:w-[450px] bg-slate-800 p-6 flex flex-col border-l border-slate-700 shadow-2xl z-10">
+        <div className="flex items-center justify-between mb-8">
+          <h3 className="text-2xl font-bold flex items-center">
             <div className="w-3 h-3 bg-green-500 rounded-full mr-3 animate-pulse"></div>
             {locationId} Feed
           </h3>
-          <button
-            onClick={handleDownloadCSV}
-            disabled={!isReady || isDownloading}
-            className="flex items-center px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
-          >
-            {isDownloading ? (
-              <Loader size={14} className="animate-spin" />
-            ) : (
-              <Download size={14} />
+          <div className="flex gap-2">
+            {wakeLockActive && (
+              <div className="px-2 py-1 bg-green-900/30 border border-green-500 text-green-400 text-[10px] rounded uppercase font-bold flex items-center">
+                <Zap size={10} className="mr-1" /> ON
+              </div>
             )}
-            <span className="ml-2">CSV</span>
-          </button>
+            <button
+              onClick={handleDownloadCSV}
+              disabled={!isReady || isDownloading}
+              className="flex items-center px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
+            >
+              {isDownloading ? (
+                <Loader size={14} className="animate-spin" />
+              ) : (
+                <Download size={14} />
+              )}
+              <span className="ml-2">CSV</span>
+            </button>
+          </div>
         </div>
-        <div className="flex-1 overflow-y-auto space-y-4">
+
+        <div className="flex-1 overflow-y-auto space-y-4 pr-2">
           {!isReady ? (
             <div className="text-center text-slate-500 mt-10">
               <Loader className="animate-spin mx-auto mb-2" /> Connecting...
@@ -471,17 +505,26 @@ function KioskScreen({ isReady, locationId }) {
             recentScans.map((scan) => (
               <div
                 key={scan.id}
-                className="bg-slate-700 p-4 rounded-lg border-l-4 border-green-500 animate-in fade-in slide-in-from-right duration-500"
+                className="bg-slate-700 p-5 rounded-xl border-l-4 border-green-500 animate-in fade-in slide-in-from-right duration-500 shadow-sm"
               >
-                <div className="flex justify-between items-start">
+                <div className="flex justify-between items-center">
                   <div>
-                    <div className="font-bold text-white">{scan.userName}</div>
-                    <div className="text-slate-300 text-xs mt-1">
+                    <div className="font-bold text-white text-lg">
+                      {scan.userName}
+                    </div>
+                    <div className="text-slate-300 text-sm mt-1">
                       {scan.timestamp?.toDate().toLocaleTimeString()}
                     </div>
                   </div>
-                  <div className="bg-slate-800 px-3 py-1 rounded text-green-400 font-mono font-bold text-lg">
-                    #{scan.queueNumber}
+                  <div className="flex flex-col items-end">
+                    <div className="bg-slate-800 px-4 py-2 rounded-lg text-green-400 font-mono font-bold text-2xl border border-slate-600">
+                      #{scan.queueNumber}
+                    </div>
+                    {scan.status === "completed" && (
+                      <span className="text-[10px] text-slate-400 mt-1 uppercase tracking-wider font-bold">
+                        Checked Out
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -493,7 +536,7 @@ function KioskScreen({ isReady, locationId }) {
   );
 }
 
-// --- SCREEN 3: ADMIN DASHBOARD ---
+// --- SCREEN 3: ADMIN DASHBOARD (Unchanged) ---
 function AdminScreen({ isReady, onBack }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
@@ -528,38 +571,13 @@ function AdminScreen({ isReady, onBack }) {
         { forceRefreshTimestamp: serverTimestamp() },
         { merge: true }
       );
-      alert("Refresh Signal Sent! Kiosks will reload in a few seconds.");
+      alert("Refresh Signal Sent!");
     } catch (e) {
-      console.error("Error triggering refresh:", e);
       alert("Failed to send signal.");
     } finally {
       setIsRefreshingKiosks(false);
     }
   };
-
-  useEffect(() => {
-    if (!isReady || !db || !isAuthenticated) return;
-    const q = query(collection(db, COLLECTION_NAME));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      let data = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-      if (filterLoc !== "ALL") {
-        data = data.filter((d) => d.locationId === filterLoc);
-      }
-      if (filterDate) {
-        const selectedDateStr = new Date(filterDate).toDateString();
-        data = data.filter((d) => {
-          if (!d.timestamp) return false;
-          return d.timestamp.toDate().toDateString() === selectedDateStr;
-        });
-      }
-      data.sort(
-        (a, b) =>
-          (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
-      );
-      setScans(data.slice(0, 200));
-    });
-    return () => unsubscribe();
-  }, [isReady, filterLoc, filterDate, isAuthenticated]);
 
   const handleExport = async () => {
     if (!isReady || !db) return;
@@ -567,6 +585,7 @@ function AdminScreen({ isReady, onBack }) {
       const q = query(collection(db, COLLECTION_NAME));
       const snapshot = await getDocs(q);
       let data = snapshot.docs.map((doc) => doc.data());
+
       if (filterLoc !== "ALL")
         data = data.filter((d) => d.locationId === filterLoc);
       if (filterDate) {
@@ -598,7 +617,7 @@ function AdminScreen({ isReady, onBack }) {
             dt.toLocaleDateString(),
             dt.toLocaleTimeString(),
             `"${d.deviceId}"`,
-            d.status || "active",
+            d.status || "waiting",
           ].join(",");
         }),
       ].join("\n");
@@ -613,6 +632,33 @@ function AdminScreen({ isReady, onBack }) {
     }
   };
 
+  useEffect(() => {
+    if (!isReady || !db || !isAuthenticated) return;
+    const q = query(collection(db, COLLECTION_NAME));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      let data = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+      if (filterLoc !== "ALL") {
+        data = data.filter((d) => d.locationId === filterLoc);
+      }
+      if (filterDate) {
+        const selectedDateStr = new Date(filterDate).toDateString();
+        data = data.filter((d) => {
+          if (!d.timestamp) return false;
+          return d.timestamp.toDate().toDateString() === selectedDateStr;
+        });
+      }
+      data.sort(
+        (a, b) =>
+          (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
+      );
+      setScans(data.slice(0, 200));
+    });
+    return () => unsubscribe();
+  }, [isReady, filterLoc, filterDate, isAuthenticated]);
+
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6">
@@ -624,23 +670,16 @@ function AdminScreen({ isReady, onBack }) {
             Admin Access
           </h2>
           <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Password
-              </label>
-              <input
-                type="password"
-                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                placeholder="Enter password"
-                value={passwordInput}
-                onChange={(e) => setPasswordInput(e.target.value)}
-                autoFocus
-              />
-            </div>
+            <input
+              type="password"
+              className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              placeholder="Enter password"
+              value={passwordInput}
+              onChange={(e) => setPasswordInput(e.target.value)}
+              autoFocus
+            />
             {authError && (
-              <p className="text-red-500 text-sm text-center font-medium">
-                {authError}
-              </p>
+              <p className="text-red-500 text-sm text-center">{authError}</p>
             )}
             <button
               type="submit"
@@ -682,12 +721,7 @@ function AdminScreen({ isReady, onBack }) {
               disabled={isRefreshingKiosks}
               className="flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-sm font-bold shadow-sm transition-colors"
             >
-              {isRefreshingKiosks ? (
-                <Loader size={16} className="animate-spin mr-2" />
-              ) : (
-                <Zap size={16} className="mr-2" />
-              )}
-              Force Refresh All Kiosks
+              <Zap size={16} className="mr-2" /> Force Refresh Kiosks
             </button>
             <div className="flex items-center bg-white px-3 py-2 rounded-lg border border-slate-200">
               <Filter size={16} className="text-slate-400 mr-2" />
@@ -696,7 +730,7 @@ function AdminScreen({ isReady, onBack }) {
                 onChange={(e) => setFilterLoc(e.target.value)}
                 className="bg-transparent outline-none text-sm font-medium"
               >
-                <option value="ALL">All 30 Locations</option>
+                <option value="ALL">All Locations</option>
                 {LOCATIONS.map((l) => (
                   <option key={l} value={l}>
                     {l}
@@ -704,52 +738,12 @@ function AdminScreen({ isReady, onBack }) {
                 ))}
               </select>
             </div>
-            <div className="flex items-center bg-white px-3 py-2 rounded-lg border border-slate-200">
-              <Calendar size={16} className="text-slate-400 mr-2" />
-              <input
-                type="date"
-                value={filterDate}
-                onChange={(e) => setFilterDate(e.target.value)}
-                className="bg-transparent outline-none text-sm font-medium text-slate-700"
-              />
-            </div>
             <button
               onClick={handleExport}
               className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-bold"
             >
               <Download size={16} className="mr-2" /> Export CSV
             </button>
-          </div>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-            <div className="text-slate-500 text-sm font-semibold uppercase">
-              Total Scans
-            </div>
-            <div className="text-3xl font-bold text-slate-800">
-              {scans.length}
-            </div>
-          </div>
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-            <div className="text-slate-500 text-sm font-semibold uppercase">
-              Active Locations
-            </div>
-            <div className="text-3xl font-bold text-blue-600">
-              {filterLoc === "ALL"
-                ? new Set(scans.map((s) => s.locationId)).size
-                : 1}
-            </div>
-          </div>
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-            <div className="text-slate-500 text-sm font-semibold uppercase">
-              Live Feed
-            </div>
-            <div className="flex items-center mt-1">
-              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse mr-2"></div>
-              <span className="text-sm text-green-600 font-medium">
-                {isReady ? "Real-time updates active" : "Connecting..."}
-              </span>
-            </div>
           </div>
         </div>
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -766,64 +760,32 @@ function AdminScreen({ isReady, onBack }) {
                   User
                 </th>
                 <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase">
-                  Time
-                </th>
-                <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase">
                   Status
                 </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {!isReady ? (
-                <tr>
-                  <td
-                    colSpan="5"
-                    className="px-6 py-8 text-center text-slate-400"
-                  >
-                    Loading data...
+              {scans.map((scan) => (
+                <tr
+                  key={scan.id}
+                  className="hover:bg-slate-50 transition-colors"
+                >
+                  <td className="px-6 py-4">{scan.locationId}</td>
+                  <td className="px-6 py-4 font-bold">#{scan.queueNumber}</td>
+                  <td className="px-6 py-4">{scan.userName}</td>
+                  <td className="px-6 py-4">
+                    <span
+                      className={`px-2 py-1 rounded text-xs ${
+                        scan.status === "completed"
+                          ? "bg-gray-100 text-gray-500"
+                          : "bg-green-100 text-green-700"
+                      }`}
+                    >
+                      {scan.status || "waiting"}
+                    </span>
                   </td>
                 </tr>
-              ) : scans.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan="5"
-                    className="px-6 py-8 text-center text-slate-400"
-                  >
-                    No records found.
-                  </td>
-                </tr>
-              ) : (
-                scans.map((scan) => (
-                  <tr
-                    key={scan.id}
-                    className="hover:bg-slate-50 transition-colors"
-                  >
-                    <td className="px-6 py-4">
-                      <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs font-bold">
-                        {scan.locationId}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 font-mono font-bold text-slate-700">
-                      #{scan.queueNumber}
-                    </td>
-                    <td className="px-6 py-4 text-slate-800">
-                      {scan.userName}
-                    </td>
-                    <td className="px-6 py-4 text-slate-500 text-sm">
-                      {scan.timestamp?.toDate().toLocaleString()}
-                    </td>
-                    <td className="px-6 py-4 text-slate-500 text-sm">
-                      {scan.status === "abandoned" ? (
-                        <span className="text-red-500 font-bold">
-                          Timed Out
-                        </span>
-                      ) : (
-                        <span className="text-green-600 font-bold">Active</span>
-                      )}
-                    </td>
-                  </tr>
-                ))
-              )}
+              ))}
             </tbody>
           </table>
         </div>
@@ -832,7 +794,7 @@ function AdminScreen({ isReady, onBack }) {
   );
 }
 
-// --- SCREEN 4: SCANNER (Updated with Inactivity Modal) ---
+// --- SCREEN 4: SCANNER (With Sound Notification) ---
 function ScannerScreen({ token, locationId, isReady, user }) {
   const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
@@ -840,93 +802,31 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   const [fingerprint, setFingerprint] = useState("");
   const [userEmail, setUserEmail] = useState("");
   const [myQueueNumber, setMyQueueNumber] = useState(null);
-  const [myDocId, setMyDocId] = useState(null); // Track Firestore ID
+  const [myDocId, setMyDocId] = useState(null);
+
+  const [peopleAhead, setPeopleAhead] = useState(0);
+  const [isCheckedOut, setIsCheckedOut] = useState(false);
+  const [isCheckingOut, setIsCheckingOut] = useState(false);
 
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [showPermissionModal, setShowPermissionModal] = useState(false);
   const [isRecovering, setIsRecovering] = useState(false);
   const [emailInput, setEmailInput] = useState("");
 
-  // ⚠️ INACTIVITY CONFIGURATION
-  // 5 Minutes in Milliseconds
-  const CHECK_INTERVAL_MS = 5 * 60 * 1000;
-  // 10 Seconds to Respond
-  const TIMEOUT_SECONDS = 10;
-
-  const [lastInteraction, setLastInteraction] = useState(Date.now());
-  const [showInactivityModal, setShowInactivityModal] = useState(false);
-  const [countdown, setCountdown] = useState(TIMEOUT_SECONDS);
-
-  // ✅ INACTIVITY MONITORING LOGIC
+  // ✅ SOUND NOTIFICATION LOGIC
   useEffect(() => {
-    // Only run if user is successfully checked in and not already timed out
-    if (status !== "success" || !myDocId) return;
-
-    const timer = setInterval(() => {
-      // 1. Check if time has passed
-      const timeSinceLastActive = Date.now() - lastInteraction;
-
-      if (timeSinceLastActive > CHECK_INTERVAL_MS) {
-        // 2. Trigger Modal
-        if (!showInactivityModal) {
-          setShowInactivityModal(true);
-          setCountdown(TIMEOUT_SECONDS);
-        }
-      }
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [status, lastInteraction, showInactivityModal, myDocId]);
-
-  // ✅ COUNTDOWN LOGIC
-  useEffect(() => {
-    if (!showInactivityModal) return;
-
-    const countdownTimer = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(countdownTimer);
-          handleUserTimeout();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(countdownTimer);
-  }, [showInactivityModal]);
-
-  // ✅ ACTION: KICK USER OUT
-  const handleUserTimeout = async () => {
-    setShowInactivityModal(false);
-    setStatus("timeout"); // Change UI to "You were removed"
-
-    if (db && myDocId) {
-      try {
-        const docRef = doc(db, COLLECTION_NAME, myDocId);
-        await updateDoc(docRef, {
-          status: "abandoned",
-        });
-      } catch (e) {
-        console.error("Failed to mark as abandoned", e);
-      }
+    if (status === "success" && !isCheckedOut && peopleAhead === 0) {
+      // Simple "Ding" sound
+      const audio = new Audio(
+        "https://actions.google.com/sounds/v1/alarms/beep_short.ogg"
+      );
+      audio
+        .play()
+        .catch((e) =>
+          console.log("Audio play failed (user interaction needed first)", e)
+        );
     }
-  };
-
-  // ✅ ACTION: USER SAYS "I'M HERE"
-  const handleUserPresent = async () => {
-    setShowInactivityModal(false);
-    setLastInteraction(Date.now()); // Reset timer
-    setCountdown(TIMEOUT_SECONDS); // Reset countdown
-
-    // Optional: Send heartbeat to DB
-    if (db && myDocId) {
-      const docRef = doc(db, COLLECTION_NAME, myDocId);
-      await updateDoc(docRef, {
-        lastActive: serverTimestamp(),
-      });
-    }
-  };
+  }, [peopleAhead, status, isCheckedOut]);
 
   const generateNativeFingerprint = async () => {
     const components = [
@@ -980,6 +880,49 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     identifyDevice();
   }, [isReady]);
 
+  // QUEUE COUNTER
+  useEffect(() => {
+    if (
+      status === "success" &&
+      myQueueNumber &&
+      !isCheckedOut &&
+      isReady &&
+      db
+    ) {
+      const q = query(
+        collection(db, COLLECTION_NAME),
+        where("locationId", "==", locationId),
+        where("status", "==", "waiting")
+      );
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const waitingUsers = snapshot.docs.map((d) => d.data());
+        const count = waitingUsers.filter(
+          (user) => user.queueNumber < myQueueNumber
+        ).length;
+        setPeopleAhead(count);
+      });
+      return () => unsubscribe();
+    }
+  }, [status, myQueueNumber, isCheckedOut, locationId, isReady]);
+
+  const handleCheckout = async () => {
+    if (!myDocId) return;
+    setIsCheckingOut(true);
+    try {
+      const docRef = doc(db, COLLECTION_NAME, myDocId);
+      await updateDoc(docRef, {
+        status: "completed",
+        checkoutTime: serverTimestamp(),
+      });
+      setIsCheckedOut(true);
+    } catch (e) {
+      console.error("Checkout Error", e);
+      alert("Could not check out. Please try again.");
+    } finally {
+      setIsCheckingOut(false);
+    }
+  };
+
   const handleEmailSubmit = async (e) => {
     e.preventDefault();
     if (!emailInput.includes("@") || emailInput.length < 5) {
@@ -988,12 +931,12 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     }
     const emailRegex =
       /^[\w-\.]+@(gmail|outlook|speedo-delivery|topdeliveryeg)\.(com|art)$/i;
+
     if (!emailRegex.test(emailInput)) {
-      alert(
-        "Access Denied: Please use a valid company email (e.g., @speedo-delivery.com, @topdeliveryeg.art, etc)."
-      );
+      alert("Access Denied: Please use a valid company email.");
       return;
     }
+
     setIsRecovering(true);
     const STORAGE_KEY = "secure_user_badge";
     try {
@@ -1050,6 +993,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
   const saveCheckIn = async (coords) => {
     setStatus("saving");
+
     try {
       const duplicateQ = query(
         collection(db, COLLECTION_NAME),
@@ -1057,24 +1001,25 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         where("tokenUsed", "==", token)
       );
       const duplicateSnap = await getDocs(duplicateQ);
+
       if (!duplicateSnap.empty) {
         const existingDoc = duplicateSnap.docs[0];
         const existingData = existingDoc.data();
-        if (existingData.status === "abandoned") {
-          // If they were abandoned, create a NEW ticket instead of restoring
-          // (Let the code fall through to create new)
-        } else {
-          setMyQueueNumber(existingData.queueNumber);
-          setMyDocId(existingDoc.id); // Save ID for updates
-          setStatus("success");
-          return;
+        setMyQueueNumber(existingData.queueNumber);
+        setMyDocId(existingDoc.id);
+
+        if (existingData.status === "completed") {
+          setIsCheckedOut(true);
         }
+
+        setStatus("success");
+        return;
       }
     } catch (e) {
       console.warn("Duplicate check warning:", e);
     }
 
-    const MAX_RETRIES = 5;
+    const MAX_RETRIES = 20;
     let attempt = 0;
     let success = false;
 
@@ -1093,6 +1038,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     const tokenTimestamp = parseInt(token.split("-")[1]);
     const PAST_BUFFER = 8;
     const FUTURE_BUFFER = 2;
+
     const isValid =
       token.startsWith("secure-") &&
       tokenTimestamp >= currentTimestamp - PAST_BUFFER &&
@@ -1107,10 +1053,14 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     const todayStr = new Date().toISOString().split("T")[0];
     const counterRef = doc(db, COUNTER_COLLECTION, locationId);
     const newCheckInRef = doc(collection(db, COLLECTION_NAME));
+    const newDocId = newCheckInRef.id;
 
     while (attempt < MAX_RETRIES && !success) {
       try {
         attempt++;
+        if (attempt > 1)
+          setErrorMsg(`Queue busy, retrying (${attempt}/${MAX_RETRIES})...`);
+
         const assignedQueueNumber = await runTransaction(
           db,
           async (transaction) => {
@@ -1142,92 +1092,59 @@ function ScannerScreen({ token, locationId, isReady, user }) {
               fingerprint: fingerprint,
               deviceInfo: navigator.userAgent,
               queueNumber: nextNum,
-              status: "active", // NEW FIELD
               timestamp: serverTimestamp(),
+              status: "waiting",
             });
             return nextNum;
           }
         );
+
         setMyQueueNumber(assignedQueueNumber);
-        setMyDocId(newCheckInRef.id); // Save the ID
+        setMyDocId(newDocId);
+        setErrorMsg("");
         setStatus("success");
         success = true;
       } catch (err) {
-        console.warn(`Attempt ${attempt} failed:`, err);
         if (attempt >= MAX_RETRIES) {
           setErrorMsg("System busy. Please try scanning again.");
           setStatus("error");
         } else {
-          const waitTime = Math.floor(Math.random() * 450) + 50;
-          await new Promise((resolve) => setTimeout(resolve, waitTime));
+          const backoff = Math.min(5000, Math.pow(2, attempt) * 200);
+          const jitter = Math.floor(Math.random() * 200);
+          await new Promise((resolve) => setTimeout(resolve, backoff + jitter));
         }
       }
     }
   };
 
-  // ✅ UI: TIMEOUT SCREEN
-  if (status === "timeout") {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-red-50 text-center animate-in zoom-in duration-300">
-        <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-6 text-red-600">
-          <Clock size={32} />
-        </div>
-        <h2 className="text-xl font-bold text-red-800 mb-2">
-          You have been removed
-        </h2>
-        <p className="text-slate-600 max-w-xs mx-auto mb-6">
-          We didn't hear from you for a while, so we gave your spot to the next
-          person to keep the line moving.
-        </p>
-        <button
-          onClick={() => window.location.reload()}
-          className="px-6 py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-colors"
-        >
-          Start Over
-        </button>
-      </div>
-    );
-  }
-
-  // ✅ UI: SUCCESS SCREEN WITH MODAL
   if (status === "success") {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-green-50 text-center animate-in zoom-in duration-300 relative">
-        {/* --- INACTIVITY MODAL --- */}
-        {showInactivityModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-            <div className="bg-white p-6 rounded-2xl max-w-sm w-full shadow-2xl text-center">
-              <div className="w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4 text-yellow-600 animate-pulse">
-                <AlertTriangle size={32} />
-              </div>
-              <h3 className="text-2xl font-bold text-slate-800 mb-2">
-                Are you there?
-              </h3>
-              <p className="text-slate-500 mb-6">
-                Please confirm you are still waiting.
-              </p>
-
-              <div className="text-5xl font-mono font-bold text-red-500 mb-6">
-                00:{countdown.toString().padStart(2, "0")}
-              </div>
-
-              <button
-                onClick={handleUserPresent}
-                className="w-full py-4 bg-green-600 text-white rounded-xl font-bold text-lg hover:bg-green-700 transition-all active:scale-95"
-              >
-                YES, I'M HERE!
-              </button>
-            </div>
+    if (isCheckedOut) {
+      return (
+        <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-gray-100 text-center animate-in zoom-in duration-300">
+          <div className="w-16 h-16 bg-gray-200 rounded-full flex items-center justify-center mb-6 text-gray-500">
+            <LogOut size={32} />
           </div>
-        )}
-        {/* ------------------------- */}
-
+          <h2 className="text-xl font-bold text-gray-800 mb-2">
+            You have checked out
+          </h2>
+          <p className="text-gray-500 mb-6">
+            Thank you! You have been removed from the queue.
+          </p>
+          <div className="bg-white p-4 rounded shadow-sm text-sm">
+            Ticket #{myQueueNumber} Completed
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-green-50 text-center animate-in zoom-in duration-300">
         <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-6 text-green-600">
           <CheckCircle size={32} />
         </div>
         <h2 className="text-xl font-bold text-green-800 mb-2">
           Check-In Successful
         </h2>
+
         <div className="bg-white p-6 rounded-2xl shadow-lg border border-green-200 mt-4 mb-6 w-full max-w-xs">
           <div className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-1">
             {locationId} Ticket
@@ -1239,9 +1156,34 @@ function ScannerScreen({ token, locationId, isReady, user }) {
             {userEmail}
           </div>
         </div>
-        <p className="text-xs text-slate-400">
-          ID: {deviceId.substring(0, 12)}...
-        </p>
+
+        <div className="w-full max-w-xs mb-8">
+          <div
+            className={`${
+              peopleAhead === 0 ? "bg-green-600" : "bg-blue-600"
+            } text-white p-4 rounded-xl shadow-md transition-colors duration-500`}
+          >
+            <div className="text-xs uppercase font-bold opacity-80 mb-1">
+              Users Remaining Before You
+            </div>
+            <div className="text-4xl font-bold">
+              {peopleAhead === 0 ? "It's your turn!" : peopleAhead}
+            </div>
+          </div>
+        </div>
+
+        <button
+          onClick={handleCheckout}
+          disabled={isCheckingOut}
+          className="w-full max-w-xs py-4 bg-red-500 text-white rounded-xl font-bold shadow-lg hover:bg-red-600 transition-all flex items-center justify-center"
+        >
+          {isCheckingOut ? (
+            <Loader className="animate-spin mr-2" />
+          ) : (
+            <LogOut className="mr-2" />
+          )}
+          Checkout / Leave Queue
+        </button>
       </div>
     );
   }
@@ -1264,7 +1206,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
               <input
                 type="email"
                 required
-                className="w-full px-4 py-3 border border-slate-300 rounded-xl mb-4 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                className="w-full px-4 py-3 border border-slate-300 rounded-xl mb-4 focus:ring-2 focus:ring-blue-500 outline-none"
                 placeholder="name@company.com"
                 value={emailInput}
                 onChange={(e) => setEmailInput(e.target.value)}
@@ -1276,7 +1218,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
               >
                 {isRecovering ? (
                   <>
-                    <RefreshCw className="animate-spin mr-2" size={20} />
+                    <RefreshCw className="animate-spin mr-2" size={20} />{" "}
                     Verifying...
                   </>
                 ) : (
@@ -1287,7 +1229,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
           </div>
         </div>
       )}
-
       {showPermissionModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
           <div className="bg-white p-6 rounded-2xl max-w-sm w-full shadow-2xl">
@@ -1301,18 +1242,15 @@ function ScannerScreen({ token, locationId, isReady, user }) {
                 Checking in as: {userEmail}
               </span>
             </p>
-            <div className="flex gap-2">
-              <button
-                onClick={confirmAndCheckIn}
-                className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold"
-              >
-                Allow & Check In
-              </button>
-            </div>
+            <button
+              onClick={confirmAndCheckIn}
+              className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold"
+            >
+              Allow & Check In
+            </button>
           </div>
         </div>
       )}
-
       <div className="text-center">
         {status !== "idle" && (
           <Loader className="animate-spin mx-auto mb-4 text-blue-500" />
@@ -1329,3 +1267,4 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     </div>
   );
 }
+
