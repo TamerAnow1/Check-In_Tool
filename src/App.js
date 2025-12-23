@@ -32,7 +32,7 @@ import {
   Zap,
   Clock, // Timeout Icon
   AlertTriangle, // Warning Icon
-  Smartphone, // Missing Icon Fixed
+  Smartphone, // Test Scanner Icon
   LogOut, // Checkout Button Icon
 } from "lucide-react";
 
@@ -48,8 +48,8 @@ const firebaseConfig = {
 };
 
 // --- SETTINGS ---
-// Set this to TRUE to test the popup quickly (15 seconds)
-// Set this to FALSE for the real 5-minute timer
+// Set TRUE to test timeout in 15 seconds.
+// Set FALSE for the real 5-minute timer.
 const TEST_MODE = true;
 
 const COLLECTION_NAME = "checkins";
@@ -667,7 +667,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   const [emailInput, setEmailInput] = useState("");
 
   // ⚠️ TIMEOUT SETTINGS
-  // If TEST_MODE is true, use 15 seconds. Else use 5 minutes.
   const CHECK_INTERVAL_MS = TEST_MODE ? 15000 : 5 * 60 * 1000;
   const TIMEOUT_SECONDS = 10;
 
@@ -735,7 +734,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     }
   };
 
-  // ✅ 5. HANDLE MANUAL LEAVE (The Missing Button)
+  // ✅ 5. HANDLE MANUAL LEAVE
   const handleManualLeave = async () => {
     if (!window.confirm("Are you sure you want to leave the queue?")) return;
     setStatus("left");
@@ -752,7 +751,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
   // --- ID & CHECKIN LOGIC ---
   const generateNativeFingerprint = async () => {
-    return "fp_" + Math.random().toString(36).substr(2, 9); // Simplified for stability
+    return "fp_" + Math.random().toString(36).substr(2, 9);
   };
 
   useEffect(() => {
@@ -806,7 +805,31 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
   const saveCheckIn = async (coords) => {
     setStatus("saving");
-    // Duplicate check...
+
+    // 1. DUPLICATE CHECK
+    try {
+      const duplicateQ = query(
+        collection(db, COLLECTION_NAME),
+        where("deviceId", "==", deviceId),
+        where("tokenUsed", "==", token)
+      );
+      const duplicateSnap = await getDocs(duplicateQ);
+      if (!duplicateSnap.empty) {
+        const existingDoc = duplicateSnap.docs[0];
+        const existingData = existingDoc.data();
+        // If they were abandoned, we allow a new check-in (fall through)
+        if (existingData.status !== "abandoned") {
+          setMyQueueNumber(existingData.queueNumber);
+          setMyDocId(existingDoc.id);
+          setStatus("success");
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("Duplicate check warning:", e);
+    }
+
+    // 2. CREATE NEW TICKET
     const todayStr = new Date().toISOString().split("T")[0];
     const newRef = doc(collection(db, COLLECTION_NAME));
     try {
@@ -816,15 +839,25 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         let next = 1;
         if (cSnap.exists() && cSnap.data().date === todayStr)
           next = cSnap.data().count + 1;
+
         t.set(cRef, { date: todayStr, count: next, locationId });
+
         t.set(newRef, {
           userName: userEmail,
           locationId,
           queueNumber: next,
           deviceId,
           timestamp: serverTimestamp(),
-          status: "active", // ACTIVE
-          location: coords,
+          status: "active",
+          // ✅ FIXED: EXTRACT COORDINATES PROPERLY
+          location: {
+            lat: coords.latitude,
+            lng: coords.longitude,
+            accuracy: coords.accuracy,
+          },
+          tokenUsed: token,
+          fingerprint,
+          deviceInfo: navigator.userAgent,
         });
         return next;
       });
@@ -832,6 +865,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       setMyDocId(newRef.id);
       setStatus("success");
     } catch (e) {
+      console.error("Transaction Error:", e);
       setStatus("error");
       setErrorMsg("Failed to check in");
     }
@@ -843,7 +877,11 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     if (!navigator.geolocation) return setStatus("error");
     navigator.geolocation.getCurrentPosition(
       (pos) => saveCheckIn(pos.coords),
-      () => setStatus("error")
+      (err) => {
+        console.error("GPS Error:", err);
+        setStatus("error");
+        setErrorMsg("Location access denied.");
+      }
     );
   };
 
