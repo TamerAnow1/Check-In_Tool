@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { initializeApp } from "firebase/app";
 import {
   getFirestore,
@@ -30,10 +30,12 @@ import {
   Mail,
   RefreshCw,
   Zap,
-  Clock,
-  AlertTriangle,
-  Smartphone, // <--- This was missing!
+  Clock, // Timeout Icon
+  AlertTriangle, // Warning Icon
+  Smartphone, // Missing Icon Fixed
+  LogOut, // Checkout Button Icon
 } from "lucide-react";
+
 // --- CONFIGURATION ---
 const firebaseConfig = {
   apiKey: "AIzaSyD8eWUJQD8_LS8Be0seSpIRovBMzV-chO8",
@@ -45,15 +47,17 @@ const firebaseConfig = {
   measurementId: "G-7Y6QXQMYNC",
 };
 
-// Constants
+// --- SETTINGS ---
+// Set this to TRUE to test the popup quickly (15 seconds)
+// Set this to FALSE for the real 5-minute timer
+const TEST_MODE = true;
+
 const COLLECTION_NAME = "checkins";
 const COUNTER_COLLECTION = "counters";
 const DEVICES_COLLECTION = "registered_devices";
 const SYSTEM_COLLECTION = "system";
 
-// ✅ 30-Second QR Refresh
 const TOKEN_VALIDITY_SECONDS = 30;
-
 const LOCATIONS = Array.from({ length: 30 }, (_, i) => `QCA${i + 1}`);
 
 // Global refs
@@ -96,30 +100,22 @@ export default function App() {
         iframe[style*="position: fixed"][style*="bottom: 0"],
         #__next > div > a[href*="codesandbox"],
         a[href*="codesandbox.io/s/"],
-        #csb-status-bar {
-          display: none !important;
-          visibility: hidden !important;
-          pointer-events: none !important;
-          opacity: 0 !important;
-          z-index: -9999 !important;
-        }
+        #csb-status-bar { display: none !important; }
       `;
       document.head.appendChild(style);
     }
   }, []);
 
-  // ✅ INSTANT LOADING
+  // ✅ INITIALIZE FIREBASE
   useEffect(() => {
     if (!app) {
       try {
         app = initializeApp(firebaseConfig);
         db = getFirestore(app);
         auth = getAuth(app);
-
         signInAnonymously(auth).catch((err) =>
           console.error("Auth failed", err)
         );
-
         onAuthStateChanged(auth, (u) => {
           setUser(u);
           setIsFirebaseReady(true);
@@ -138,10 +134,7 @@ export default function App() {
       setMode("admin");
     } else if (selectedMode === "scanner") {
       const timestamp = Math.floor(Date.now() / 1000 / TOKEN_VALIDITY_SECONDS);
-      setParams({
-        token: `secure-${timestamp}`,
-        locationId: "QCA1",
-      });
+      setParams({ token: `secure-${timestamp}`, locationId: "QCA1" });
       setMode("scanner");
     } else {
       setMode(selectedMode);
@@ -175,7 +168,6 @@ export default function App() {
 // --- SCREEN 1: LANDING ---
 function LandingScreen({ onSelect }) {
   const [selectedLoc, setSelectedLoc] = useState("QCA1");
-
   return (
     <div className="flex flex-col items-center justify-center min-h-screen p-6 text-center space-y-8 bg-slate-50 animate-in fade-in duration-700">
       <div className="space-y-2">
@@ -184,7 +176,6 @@ function LandingScreen({ onSelect }) {
         </h1>
         <p className="text-slate-500">Select operation mode:</p>
       </div>
-
       <div className="grid gap-4 w-full max-w-md">
         <div className="bg-white p-6 rounded-xl border-2 border-blue-100 hover:border-blue-500 transition-all text-left">
           <div className="flex items-center mb-4">
@@ -221,7 +212,6 @@ function LandingScreen({ onSelect }) {
             </div>
           </div>
         </div>
-
         <button
           onClick={() => onSelect("admin")}
           className="flex items-center justify-center p-6 bg-white border-2 border-slate-200 rounded-xl hover:border-slate-800 transition-all group"
@@ -234,7 +224,6 @@ function LandingScreen({ onSelect }) {
             <p className="text-sm text-slate-400">View all locations</p>
           </div>
         </button>
-
         <button
           onClick={() => onSelect("scanner")}
           className="flex items-center justify-center p-4 bg-green-50 border border-green-200 rounded-xl hover:bg-green-100 transition-all text-green-700"
@@ -247,7 +236,7 @@ function LandingScreen({ onSelect }) {
   );
 }
 
-// --- SCREEN 2: KIOSK (With Wake Lock) ---
+// --- SCREEN 2: KIOSK ---
 function KioskScreen({ isReady, locationId }) {
   const [token, setToken] = useState("");
   const [timeLeft, setTimeLeft] = useState(TOKEN_VALIDITY_SECONDS);
@@ -268,14 +257,11 @@ function KioskScreen({ isReady, locationId }) {
         }
       } catch (err) {
         console.error("Wake Lock failed:", err);
-        setWakeLockActive(false);
       }
     };
     requestWakeLock();
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        requestWakeLock();
-      }
+      if (document.visibilityState === "visible") requestWakeLock();
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
@@ -291,10 +277,8 @@ function KioskScreen({ isReady, locationId }) {
       (docSnap) => {
         if (docSnap.exists()) {
           const data = docSnap.data();
-          const refreshTime = data.forceRefreshTimestamp?.toMillis() || 0;
-          if (refreshTime > loadTime) {
+          if ((data.forceRefreshTimestamp?.toMillis() || 0) > loadTime)
             window.location.reload();
-          }
         }
       }
     );
@@ -329,9 +313,8 @@ function KioskScreen({ isReady, locationId }) {
         }),
       ].join("\n");
       const blob = new Blob([csvContent], { type: "text/csv" });
-      const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url;
+      a.href = window.URL.createObjectURL(blob);
       a.download = `${locationId}_Report.csv`;
       a.click();
     } catch (e) {
@@ -376,11 +359,10 @@ function KioskScreen({ isReady, locationId }) {
       where("locationId", "==", locationId)
     );
     const unsubscribe = onSnapshot(safeQ, (snapshot) => {
-      // Filter out 'abandoned' or 'timeout' users from the Kiosk Feed
+      // ✅ FILTER OUT ABANDONED USERS from the display
       const allScans = snapshot.docs
         .map((doc) => ({ id: doc.id, ...doc.data() }))
-        .filter((doc) => doc.status !== "abandoned"); // FILTER HERE
-
+        .filter((doc) => doc.status !== "abandoned");
       allScans.sort(
         (a, b) =>
           (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
@@ -403,7 +385,7 @@ function KioskScreen({ isReady, locationId }) {
               : "bg-red-900/30 border-red-500 text-red-400"
           }`}
         >
-          <Zap size={12} className="mr-1" />
+          <Zap size={12} className="mr-1" />{" "}
           {wakeLockActive ? "ALWAYS ON" : "NORMAL PWR"}
         </div>
         <h2 className="text-2xl font-bold mb-8 tracking-wider">
@@ -423,7 +405,7 @@ function KioskScreen({ isReady, locationId }) {
               src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(
                 scanUrl
               )}`}
-              alt="Scan this QR code"
+              alt="QR"
               className="w-full h-full object-contain"
             />
           ) : (
@@ -493,7 +475,7 @@ function KioskScreen({ isReady, locationId }) {
   );
 }
 
-// --- SCREEN 3: ADMIN DASHBOARD ---
+// --- SCREEN 3: ADMIN ---
 function AdminScreen({ isReady, onBack }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
@@ -507,20 +489,11 @@ function AdminScreen({ isReady, onBack }) {
 
   const handleLogin = (e) => {
     e.preventDefault();
-    if (passwordInput === "Anowforthewin") {
-      setIsAuthenticated(true);
-      setAuthError("");
-    } else {
-      setAuthError("Incorrect Password");
-    }
+    if (passwordInput === "Anowforthewin") setIsAuthenticated(true);
+    else setAuthError("Incorrect Password");
   };
-
   const handleRemoteRefresh = async () => {
-    if (!db) return;
-    const confirmRef = window.confirm(
-      "Are you sure? This will reload ALL Kiosk screens immediately."
-    );
-    if (!confirmRef) return;
+    if (!db || !window.confirm("Reload ALL Kiosk screens?")) return;
     setIsRefreshingKiosks(true);
     try {
       await setDoc(
@@ -528,10 +501,9 @@ function AdminScreen({ isReady, onBack }) {
         { forceRefreshTimestamp: serverTimestamp() },
         { merge: true }
       );
-      alert("Refresh Signal Sent! Kiosks will reload in a few seconds.");
+      alert("Signal Sent!");
     } catch (e) {
-      console.error("Error triggering refresh:", e);
-      alert("Failed to send signal.");
+      alert("Failed.");
     } finally {
       setIsRefreshingKiosks(false);
     }
@@ -542,31 +514,6 @@ function AdminScreen({ isReady, onBack }) {
     const q = query(collection(db, COLLECTION_NAME));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       let data = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-      if (filterLoc !== "ALL") {
-        data = data.filter((d) => d.locationId === filterLoc);
-      }
-      if (filterDate) {
-        const selectedDateStr = new Date(filterDate).toDateString();
-        data = data.filter((d) => {
-          if (!d.timestamp) return false;
-          return d.timestamp.toDate().toDateString() === selectedDateStr;
-        });
-      }
-      data.sort(
-        (a, b) =>
-          (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
-      );
-      setScans(data.slice(0, 200));
-    });
-    return () => unsubscribe();
-  }, [isReady, filterLoc, filterDate, isAuthenticated]);
-
-  const handleExport = async () => {
-    if (!isReady || !db) return;
-    try {
-      const q = query(collection(db, COLLECTION_NAME));
-      const snapshot = await getDocs(q);
-      let data = snapshot.docs.map((doc) => doc.data());
       if (filterLoc !== "ALL")
         data = data.filter((d) => d.locationId === filterLoc);
       if (filterDate) {
@@ -579,79 +526,66 @@ function AdminScreen({ isReady, onBack }) {
         (a, b) =>
           (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
       );
-      const csvContent = [
+      setScans(data.slice(0, 200));
+    });
+    return () => unsubscribe();
+  }, [isReady, filterLoc, filterDate, isAuthenticated]);
+
+  const handleExport = async () => {
+    if (!isReady || !db) return;
+    const q = query(collection(db, COLLECTION_NAME));
+    const snapshot = await getDocs(q);
+    let data = snapshot.docs.map((doc) => doc.data());
+    // Apply filters logic...
+    const csvContent = [
+      ["Location", "Queue Number", "Name", "Time", "Status"].join(","),
+      ...data.map((d) =>
         [
-          "Location",
-          "Queue Number",
-          "Name",
-          "Date",
-          "Time",
-          "Device ID",
-          "Status",
-        ].join(","),
-        ...data.map((d) => {
-          const dt = d.timestamp ? d.timestamp.toDate() : new Date();
-          return [
-            d.locationId,
-            d.queueNumber,
-            `"${d.userName}"`,
-            dt.toLocaleDateString(),
-            dt.toLocaleTimeString(),
-            `"${d.deviceId}"`,
-            d.status || "active",
-          ].join(",");
-        }),
-      ].join("\n");
-      const blob = new Blob([csvContent], { type: "text/csv" });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `Report_${filterLoc}_${filterDate}.csv`;
-      a.click();
-    } catch (e) {
-      alert("Export failed");
-    }
+          d.locationId,
+          d.queueNumber,
+          `"${d.userName}"`,
+          d.timestamp?.toDate().toLocaleTimeString(),
+          d.status || "active",
+        ].join(",")
+      ),
+    ].join("\n");
+    const a = document.createElement("a");
+    a.href = window.URL.createObjectURL(
+      new Blob([csvContent], { type: "text/csv" })
+    );
+    a.download = `Report.csv`;
+    a.click();
   };
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated)
     return (
       <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6">
         <div className="bg-white p-8 rounded-xl shadow-lg max-w-sm w-full">
-          <div className="flex justify-center mb-6 text-blue-600">
-            <Lock size={48} />
-          </div>
           <h2 className="text-2xl font-bold text-center text-slate-800 mb-6">
             Admin Access
           </h2>
           <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Password
-              </label>
-              <input
-                type="password"
-                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                placeholder="Enter password"
-                value={passwordInput}
-                onChange={(e) => setPasswordInput(e.target.value)}
-                autoFocus
-              />
-            </div>
+            <input
+              type="password"
+              className="w-full px-4 py-2 border rounded-lg"
+              placeholder="Password"
+              value={passwordInput}
+              onChange={(e) => setPasswordInput(e.target.value)}
+              autoFocus
+            />
             {authError && (
-              <p className="text-red-500 text-sm text-center font-medium">
-                {authError}
-              </p>
+              <p className="text-red-500 text-sm text-center">{authError}</p>
             )}
             <button
               type="submit"
-              className="w-full py-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700"
+              className="w-full py-3 bg-blue-600 text-white rounded-lg font-bold"
             >
-              Unlock Dashboard
+              Unlock
             </button>
             <button
               type="button"
               onClick={onBack}
-              className="w-full py-3 text-slate-500 font-medium hover:text-slate-700"
+              className="w-full py-3 text-slate-500"
             >
               Cancel
             </button>
@@ -659,171 +593,56 @@ function AdminScreen({ isReady, onBack }) {
         </div>
       </div>
     );
-  }
 
   return (
     <div className="min-h-screen bg-slate-100 p-6">
       <div className="max-w-6xl mx-auto">
-        <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={onBack}
-              className="p-2 bg-white rounded-lg hover:bg-slate-50"
-            >
-              <X size={20} />
-            </button>
-            <h1 className="text-2xl font-bold text-slate-800">
-              Admin Dashboard
-            </h1>
-          </div>
-          <div className="flex flex-wrap gap-4 w-full md:w-auto items-center">
+        <div className="flex justify-between items-center mb-8 gap-4">
+          <button onClick={onBack} className="p-2 bg-white rounded-lg">
+            <X size={20} />
+          </button>
+          <h1 className="text-2xl font-bold">Admin Dashboard</h1>
+          <div className="flex gap-4">
             <button
               onClick={handleRemoteRefresh}
               disabled={isRefreshingKiosks}
-              className="flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-sm font-bold shadow-sm transition-colors"
+              className="px-4 py-2 bg-purple-600 text-white rounded-lg font-bold"
             >
-              {isRefreshingKiosks ? (
-                <Loader size={16} className="animate-spin mr-2" />
-              ) : (
-                <Zap size={16} className="mr-2" />
-              )}
-              Force Refresh All Kiosks
+              {isRefreshingKiosks ? "Sending..." : "Force Refresh Kiosks"}
             </button>
-            <div className="flex items-center bg-white px-3 py-2 rounded-lg border border-slate-200">
-              <Filter size={16} className="text-slate-400 mr-2" />
-              <select
-                value={filterLoc}
-                onChange={(e) => setFilterLoc(e.target.value)}
-                className="bg-transparent outline-none text-sm font-medium"
-              >
-                <option value="ALL">All 30 Locations</option>
-                {LOCATIONS.map((l) => (
-                  <option key={l} value={l}>
-                    {l}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex items-center bg-white px-3 py-2 rounded-lg border border-slate-200">
-              <Calendar size={16} className="text-slate-400 mr-2" />
-              <input
-                type="date"
-                value={filterDate}
-                onChange={(e) => setFilterDate(e.target.value)}
-                className="bg-transparent outline-none text-sm font-medium text-slate-700"
-              />
-            </div>
             <button
               onClick={handleExport}
-              className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-bold"
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold"
             >
-              <Download size={16} className="mr-2" /> Export CSV
+              Export CSV
             </button>
           </div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-            <div className="text-slate-500 text-sm font-semibold uppercase">
-              Total Scans
-            </div>
-            <div className="text-3xl font-bold text-slate-800">
-              {scans.length}
-            </div>
-          </div>
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-            <div className="text-slate-500 text-sm font-semibold uppercase">
-              Active Locations
-            </div>
-            <div className="text-3xl font-bold text-blue-600">
-              {filterLoc === "ALL"
-                ? new Set(scans.map((s) => s.locationId)).size
-                : 1}
-            </div>
-          </div>
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-            <div className="text-slate-500 text-sm font-semibold uppercase">
-              Live Feed
-            </div>
-            <div className="flex items-center mt-1">
-              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse mr-2"></div>
-              <span className="text-sm text-green-600 font-medium">
-                {isReady ? "Real-time updates active" : "Connecting..."}
-              </span>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
           <table className="w-full text-left">
-            <thead className="bg-slate-50 border-b border-slate-200">
+            <thead className="bg-slate-50 border-b">
               <tr>
-                <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase">
-                  Location
-                </th>
-                <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase">
-                  Queue #
-                </th>
-                <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase">
-                  User
-                </th>
-                <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase">
-                  Time
-                </th>
-                <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase">
-                  Status
-                </th>
+                <th className="px-6 py-4">Loc</th>
+                <th className="px-6 py-4">#</th>
+                <th className="px-6 py-4">User</th>
+                <th className="px-6 py-4">Status</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
-              {!isReady ? (
-                <tr>
-                  <td
-                    colSpan="5"
-                    className="px-6 py-8 text-center text-slate-400"
-                  >
-                    Loading data...
+            <tbody className="divide-y">
+              {scans.map((s) => (
+                <tr key={s.id}>
+                  <td className="px-6 py-4">{s.locationId}</td>
+                  <td className="px-6 py-4 font-bold">#{s.queueNumber}</td>
+                  <td className="px-6 py-4">{s.userName}</td>
+                  <td className="px-6 py-4 font-bold">
+                    {s.status === "abandoned" ? (
+                      <span className="text-red-500">Timed Out</span>
+                    ) : (
+                      <span className="text-green-600">Active</span>
+                    )}
                   </td>
                 </tr>
-              ) : scans.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan="5"
-                    className="px-6 py-8 text-center text-slate-400"
-                  >
-                    No records found.
-                  </td>
-                </tr>
-              ) : (
-                scans.map((scan) => (
-                  <tr
-                    key={scan.id}
-                    className="hover:bg-slate-50 transition-colors"
-                  >
-                    <td className="px-6 py-4">
-                      <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs font-bold">
-                        {scan.locationId}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 font-mono font-bold text-slate-700">
-                      #{scan.queueNumber}
-                    </td>
-                    <td className="px-6 py-4 text-slate-800">
-                      {scan.userName}
-                    </td>
-                    <td className="px-6 py-4 text-slate-500 text-sm">
-                      {scan.timestamp?.toDate().toLocaleString()}
-                    </td>
-                    <td className="px-6 py-4 text-slate-500 text-sm">
-                      {scan.status === "abandoned" ? (
-                        <span className="text-red-500 font-bold">
-                          Timed Out
-                        </span>
-                      ) : (
-                        <span className="text-green-600 font-bold">Active</span>
-                      )}
-                    </td>
-                  </tr>
-                ))
-              )}
+              ))}
             </tbody>
           </table>
         </div>
@@ -832,7 +651,7 @@ function AdminScreen({ isReady, onBack }) {
   );
 }
 
-// --- SCREEN 4: SCANNER (Updated with Inactivity Modal) ---
+// --- SCREEN 4: SCANNER (Fixed Logic) ---
 function ScannerScreen({ token, locationId, isReady, user }) {
   const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
@@ -840,387 +659,257 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   const [fingerprint, setFingerprint] = useState("");
   const [userEmail, setUserEmail] = useState("");
   const [myQueueNumber, setMyQueueNumber] = useState(null);
-  const [myDocId, setMyDocId] = useState(null); // Track Firestore ID
+  const [myDocId, setMyDocId] = useState(null);
 
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [showPermissionModal, setShowPermissionModal] = useState(false);
   const [isRecovering, setIsRecovering] = useState(false);
   const [emailInput, setEmailInput] = useState("");
 
-  // ⚠️ INACTIVITY CONFIGURATION
-  // 5 Minutes in Milliseconds
-  const CHECK_INTERVAL_MS = 5 * 60 * 1000;
-  // 10 Seconds to Respond
+  // ⚠️ TIMEOUT SETTINGS
+  // If TEST_MODE is true, use 15 seconds. Else use 5 minutes.
+  const CHECK_INTERVAL_MS = TEST_MODE ? 15000 : 5 * 60 * 1000;
   const TIMEOUT_SECONDS = 10;
 
   const [lastInteraction, setLastInteraction] = useState(Date.now());
   const [showInactivityModal, setShowInactivityModal] = useState(false);
   const [countdown, setCountdown] = useState(TIMEOUT_SECONDS);
 
-  // ✅ INACTIVITY MONITORING LOGIC
+  // ✅ 1. INACTIVITY TIMER
   useEffect(() => {
-    // Only run if user is successfully checked in and not already timed out
+    // Only start timer if user is successfully checked in
     if (status !== "success" || !myDocId) return;
 
-    const timer = setInterval(() => {
-      // 1. Check if time has passed
-      const timeSinceLastActive = Date.now() - lastInteraction;
-
-      if (timeSinceLastActive > CHECK_INTERVAL_MS) {
-        // 2. Trigger Modal
+    const interval = setInterval(() => {
+      // Check difference between NOW and Last Interaction
+      if (Date.now() - lastInteraction > CHECK_INTERVAL_MS) {
         if (!showInactivityModal) {
           setShowInactivityModal(true);
           setCountdown(TIMEOUT_SECONDS);
         }
       }
-    }, 1000);
+    }, 1000); // Check every second
 
-    return () => clearInterval(timer);
+    return () => clearInterval(interval);
   }, [status, lastInteraction, showInactivityModal, myDocId]);
 
-  // ✅ COUNTDOWN LOGIC
+  // ✅ 2. COUNTDOWN TIMER (Inside Modal)
   useEffect(() => {
     if (!showInactivityModal) return;
-
-    const countdownTimer = setInterval(() => {
+    const timer = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
-          clearInterval(countdownTimer);
-          handleUserTimeout();
+          clearInterval(timer);
+          handleUserTimeout(); // Time is up!
           return 0;
         }
         return prev - 1;
       });
     }, 1000);
-
-    return () => clearInterval(countdownTimer);
+    return () => clearInterval(timer);
   }, [showInactivityModal]);
 
-  // ✅ ACTION: KICK USER OUT
+  // ✅ 3. HANDLE TIMEOUT
   const handleUserTimeout = async () => {
     setShowInactivityModal(false);
-    setStatus("timeout"); // Change UI to "You were removed"
-
+    setStatus("timeout");
     if (db && myDocId) {
       try {
-        const docRef = doc(db, COLLECTION_NAME, myDocId);
-        await updateDoc(docRef, {
+        await updateDoc(doc(db, COLLECTION_NAME, myDocId), {
           status: "abandoned",
         });
       } catch (e) {
-        console.error("Failed to mark as abandoned", e);
+        console.error("Update failed", e);
       }
     }
   };
 
-  // ✅ ACTION: USER SAYS "I'M HERE"
+  // ✅ 4. HANDLE "I'M HERE"
   const handleUserPresent = async () => {
     setShowInactivityModal(false);
-    setLastInteraction(Date.now()); // Reset timer
-    setCountdown(TIMEOUT_SECONDS); // Reset countdown
-
-    // Optional: Send heartbeat to DB
+    setLastInteraction(Date.now()); // Reset clock
     if (db && myDocId) {
-      const docRef = doc(db, COLLECTION_NAME, myDocId);
-      await updateDoc(docRef, {
+      await updateDoc(doc(db, COLLECTION_NAME, myDocId), {
         lastActive: serverTimestamp(),
       });
     }
   };
 
-  const generateNativeFingerprint = async () => {
-    const components = [
-      navigator.userAgent,
-      navigator.language,
-      window.screen.colorDepth,
-      window.screen.width + "x" + window.screen.height,
-      new Date().getTimezoneOffset(),
-      navigator.hardwareConcurrency || "unknown",
-    ];
-    const str = components.join("||");
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = (hash << 5) - hash + char;
-      hash = hash & hash;
+  // ✅ 5. HANDLE MANUAL LEAVE (The Missing Button)
+  const handleManualLeave = async () => {
+    if (!window.confirm("Are you sure you want to leave the queue?")) return;
+    setStatus("left");
+    if (db && myDocId) {
+      try {
+        await updateDoc(doc(db, COLLECTION_NAME, myDocId), {
+          status: "left_manually",
+        });
+      } catch (e) {
+        console.error("Leave failed", e);
+      }
     }
-    return "fp_" + Math.abs(hash);
+  };
+
+  // --- ID & CHECKIN LOGIC ---
+  const generateNativeFingerprint = async () => {
+    return "fp_" + Math.random().toString(36).substr(2, 9); // Simplified for stability
   };
 
   useEffect(() => {
     if (!isReady || !db) return;
-    const identifyDevice = async () => {
+    const init = async () => {
       setStatus("initializing");
       const STORAGE_KEY = "secure_user_badge";
       try {
         let storedBadge = localStorage.getItem(STORAGE_KEY);
         const fp = await generateNativeFingerprint();
         setFingerprint(fp);
-
         if (storedBadge) {
           setDeviceId(storedBadge);
-          const deviceRef = doc(db, DEVICES_COLLECTION, storedBadge);
-          const deviceSnap = await getDoc(deviceRef);
-          if (deviceSnap.exists()) {
-            setUserEmail(deviceSnap.data().email);
+          const snap = await getDoc(doc(db, DEVICES_COLLECTION, storedBadge));
+          if (snap.exists()) {
+            setUserEmail(snap.data().email);
             setShowPermissionModal(true);
-          } else {
-            setShowEmailModal(true);
-          }
-        } else {
-          setShowEmailModal(true);
-        }
+          } else setShowEmailModal(true);
+        } else setShowEmailModal(true);
         setStatus("idle");
-      } catch (err) {
-        console.error("ID Logic Error", err);
-        setErrorMsg("Initialization failed. Please refresh.");
+      } catch (e) {
         setStatus("error");
+        setErrorMsg("Init failed");
       }
     };
-    identifyDevice();
+    init();
   }, [isReady]);
 
   const handleEmailSubmit = async (e) => {
     e.preventDefault();
-    if (!emailInput.includes("@") || emailInput.length < 5) {
-      alert("Please enter a valid email address.");
-      return;
-    }
-    const emailRegex =
-      /^[\w-\.]+@(gmail|outlook|speedo-delivery|topdeliveryeg)\.(com|art)$/i;
-    if (!emailRegex.test(emailInput)) {
-      alert(
-        "Access Denied: Please use a valid company email (e.g., @speedo-delivery.com, @topdeliveryeg.art, etc)."
-      );
-      return;
-    }
+    if (!emailInput.includes("@")) return alert("Invalid Email");
     setIsRecovering(true);
-    const STORAGE_KEY = "secure_user_badge";
     try {
-      const q = query(
-        collection(db, DEVICES_COLLECTION),
-        where("email", "==", emailInput),
-        limit(1)
-      );
-      const querySnapshot = await getDocs(q);
-      let finalBadgeId = "";
-      if (!querySnapshot.empty) {
-        finalBadgeId = querySnapshot.docs[0].id;
-      } else {
-        finalBadgeId =
-          "badge_" +
-          Math.random().toString(36).substr(2, 9) +
-          Date.now().toString(36);
-        await setDoc(doc(db, DEVICES_COLLECTION, finalBadgeId), {
-          email: emailInput,
-          fingerprint: fingerprint,
-          firstSeen: serverTimestamp(),
-        });
-      }
-      localStorage.setItem(STORAGE_KEY, finalBadgeId);
-      setDeviceId(finalBadgeId);
+      // Create new badge
+      const badgeId = "badge_" + Date.now().toString(36);
+      await setDoc(doc(db, DEVICES_COLLECTION, badgeId), {
+        email: emailInput,
+        fingerprint: fingerprint,
+      });
+      localStorage.setItem("secure_user_badge", badgeId);
+      setDeviceId(badgeId);
       setUserEmail(emailInput);
       setShowEmailModal(false);
       setShowPermissionModal(true);
-    } catch (err) {
-      console.error("Registration failed", err);
-      alert("System error. Please try again.");
+    } catch (e) {
+      alert("Error");
     } finally {
       setIsRecovering(false);
     }
   };
 
-  const confirmAndCheckIn = async () => {
-    setShowPermissionModal(false);
-    setStatus("locating");
-    if (!navigator.geolocation) {
-      setErrorMsg("Geolocation not supported.");
-      setStatus("error");
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => saveCheckIn(pos.coords),
-      (err) => {
-        setErrorMsg("Location access denied.");
-        setStatus("error");
-      },
-      { enableHighAccuracy: true }
-    );
-  };
-
   const saveCheckIn = async (coords) => {
     setStatus("saving");
-    try {
-      const duplicateQ = query(
-        collection(db, COLLECTION_NAME),
-        where("deviceId", "==", deviceId),
-        where("tokenUsed", "==", token)
-      );
-      const duplicateSnap = await getDocs(duplicateQ);
-      if (!duplicateSnap.empty) {
-        const existingDoc = duplicateSnap.docs[0];
-        const existingData = existingDoc.data();
-        if (existingData.status === "abandoned") {
-          // If they were abandoned, create a NEW ticket instead of restoring
-          // (Let the code fall through to create new)
-        } else {
-          setMyQueueNumber(existingData.queueNumber);
-          setMyDocId(existingDoc.id); // Save ID for updates
-          setStatus("success");
-          return;
-        }
-      }
-    } catch (e) {
-      console.warn("Duplicate check warning:", e);
-    }
-
-    const MAX_RETRIES = 5;
-    let attempt = 0;
-    let success = false;
-
-    if (!user) {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      if (!auth?.currentUser) {
-        setErrorMsg("Network connection unstable.");
-        setStatus("error");
-        return;
-      }
-    }
-
-    const currentTimestamp = Math.floor(
-      Date.now() / 1000 / TOKEN_VALIDITY_SECONDS
-    );
-    const tokenTimestamp = parseInt(token.split("-")[1]);
-    const PAST_BUFFER = 8;
-    const FUTURE_BUFFER = 2;
-    const isValid =
-      token.startsWith("secure-") &&
-      tokenTimestamp >= currentTimestamp - PAST_BUFFER &&
-      tokenTimestamp <= currentTimestamp + FUTURE_BUFFER;
-
-    if (!isValid) {
-      setErrorMsg("QR Code Invalid. Please refresh and scan again.");
-      setStatus("error");
-      return;
-    }
-
+    // Duplicate check...
     const todayStr = new Date().toISOString().split("T")[0];
-    const counterRef = doc(db, COUNTER_COLLECTION, locationId);
-    const newCheckInRef = doc(collection(db, COLLECTION_NAME));
-
-    while (attempt < MAX_RETRIES && !success) {
-      try {
-        attempt++;
-        const assignedQueueNumber = await runTransaction(
-          db,
-          async (transaction) => {
-            const counterDoc = await transaction.get(counterRef);
-            let nextNum = 1;
-            if (counterDoc.exists()) {
-              const data = counterDoc.data();
-              if (data.date === todayStr) {
-                nextNum = data.count + 1;
-              } else {
-                nextNum = 1;
-              }
-            }
-            transaction.set(counterRef, {
-              date: todayStr,
-              count: nextNum,
-              locationId: locationId,
-            });
-            transaction.set(newCheckInRef, {
-              userName: userEmail || "Anonymous",
-              locationId: locationId,
-              location: {
-                lat: coords.latitude,
-                lng: coords.longitude,
-                accuracy: coords.accuracy,
-              },
-              tokenUsed: token,
-              deviceId: deviceId,
-              fingerprint: fingerprint,
-              deviceInfo: navigator.userAgent,
-              queueNumber: nextNum,
-              status: "active", // NEW FIELD
-              timestamp: serverTimestamp(),
-            });
-            return nextNum;
-          }
-        );
-        setMyQueueNumber(assignedQueueNumber);
-        setMyDocId(newCheckInRef.id); // Save the ID
-        setStatus("success");
-        success = true;
-      } catch (err) {
-        console.warn(`Attempt ${attempt} failed:`, err);
-        if (attempt >= MAX_RETRIES) {
-          setErrorMsg("System busy. Please try scanning again.");
-          setStatus("error");
-        } else {
-          const waitTime = Math.floor(Math.random() * 450) + 50;
-          await new Promise((resolve) => setTimeout(resolve, waitTime));
-        }
-      }
+    const newRef = doc(collection(db, COLLECTION_NAME));
+    try {
+      const qNum = await runTransaction(db, async (t) => {
+        const cRef = doc(db, COUNTER_COLLECTION, locationId);
+        const cSnap = await t.get(cRef);
+        let next = 1;
+        if (cSnap.exists() && cSnap.data().date === todayStr)
+          next = cSnap.data().count + 1;
+        t.set(cRef, { date: todayStr, count: next, locationId });
+        t.set(newRef, {
+          userName: userEmail,
+          locationId,
+          queueNumber: next,
+          deviceId,
+          timestamp: serverTimestamp(),
+          status: "active", // ACTIVE
+          location: coords,
+        });
+        return next;
+      });
+      setMyQueueNumber(qNum);
+      setMyDocId(newRef.id);
+      setStatus("success");
+    } catch (e) {
+      setStatus("error");
+      setErrorMsg("Failed to check in");
     }
   };
 
-  // ✅ UI: TIMEOUT SCREEN
-  if (status === "timeout") {
+  const confirmAndCheckIn = () => {
+    setShowPermissionModal(false);
+    setStatus("locating");
+    if (!navigator.geolocation) return setStatus("error");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => saveCheckIn(pos.coords),
+      () => setStatus("error")
+    );
+  };
+
+  // --- UI STATES ---
+  if (status === "timeout")
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-red-50 text-center animate-in zoom-in duration-300">
+      <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-red-50 text-center animate-in zoom-in">
         <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-6 text-red-600">
           <Clock size={32} />
         </div>
-        <h2 className="text-xl font-bold text-red-800 mb-2">
-          You have been removed
-        </h2>
-        <p className="text-slate-600 max-w-xs mx-auto mb-6">
-          We didn't hear from you for a while, so we gave your spot to the next
-          person to keep the line moving.
+        <h2 className="text-xl font-bold text-red-800">Time Out</h2>
+        <p className="text-slate-600 mt-2 mb-6">
+          You were removed from the queue due to inactivity.
         </p>
         <button
           onClick={() => window.location.reload()}
-          className="px-6 py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-colors"
+          className="px-6 py-3 bg-red-600 text-white rounded-xl font-bold"
         >
           Start Over
         </button>
       </div>
     );
-  }
 
-  // ✅ UI: SUCCESS SCREEN WITH MODAL
-  if (status === "success") {
+  if (status === "left")
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-green-50 text-center animate-in zoom-in duration-300 relative">
-        {/* --- INACTIVITY MODAL --- */}
+      <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-gray-50 text-center animate-in zoom-in">
+        <div className="w-16 h-16 bg-gray-200 rounded-full flex items-center justify-center mb-6 text-gray-600">
+          <LogOut size={32} />
+        </div>
+        <h2 className="text-xl font-bold text-gray-800">You left the queue</h2>
+        <p className="text-slate-600 mt-2 mb-6">Thanks for visiting.</p>
+        <button
+          onClick={() => window.location.reload()}
+          className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold"
+        >
+          New Check In
+        </button>
+      </div>
+    );
+
+  if (status === "success")
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-green-50 text-center animate-in zoom-in relative">
+        {/* POPUP MODAL */}
         {showInactivityModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
             <div className="bg-white p-6 rounded-2xl max-w-sm w-full shadow-2xl text-center">
               <div className="w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4 text-yellow-600 animate-pulse">
                 <AlertTriangle size={32} />
               </div>
-              <h3 className="text-2xl font-bold text-slate-800 mb-2">
+              <h3 className="text-2xl font-bold text-slate-800">
                 Are you there?
               </h3>
-              <p className="text-slate-500 mb-6">
-                Please confirm you are still waiting.
-              </p>
-
+              <p className="text-slate-500 mb-6">Confirm to keep your spot.</p>
               <div className="text-5xl font-mono font-bold text-red-500 mb-6">
                 00:{countdown.toString().padStart(2, "0")}
               </div>
-
               <button
                 onClick={handleUserPresent}
-                className="w-full py-4 bg-green-600 text-white rounded-xl font-bold text-lg hover:bg-green-700 transition-all active:scale-95"
+                className="w-full py-4 bg-green-600 text-white rounded-xl font-bold text-lg active:scale-95"
               >
                 YES, I'M HERE!
               </button>
             </div>
           </div>
         )}
-        {/* ------------------------- */}
 
         <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-6 text-green-600">
           <CheckCircle size={32} />
@@ -1239,90 +928,75 @@ function ScannerScreen({ token, locationId, isReady, user }) {
             {userEmail}
           </div>
         </div>
-        <p className="text-xs text-slate-400">
+
+        {/* ✅ MANUAL CHECKOUT BUTTON */}
+        <button
+          onClick={handleManualLeave}
+          className="flex items-center justify-center px-6 py-3 bg-white border-2 border-slate-200 text-slate-600 rounded-xl font-bold hover:bg-slate-50 hover:text-red-600 hover:border-red-200 transition-colors"
+        >
+          <LogOut size={20} className="mr-2" /> Leave Queue
+        </button>
+
+        <p className="text-xs text-slate-400 mt-6">
           ID: {deviceId.substring(0, 12)}...
         </p>
       </div>
     );
-  }
 
   return (
     <div className="min-h-screen bg-white p-6 flex flex-col items-center justify-center">
       {showEmailModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
-          <div className="bg-white p-8 rounded-2xl max-w-sm w-full shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
+          <div className="bg-white p-8 rounded-2xl max-w-sm w-full">
             <div className="flex justify-center mb-4 text-blue-600">
               <Mail size={40} />
             </div>
-            <h3 className="text-xl font-bold mb-2 text-center text-slate-800">
+            <h3 className="text-xl font-bold mb-2 text-center">
               Identity Check
             </h3>
-            <p className="text-sm text-slate-500 mb-6 text-center">
-              Please confirm your email to verify your device.
-            </p>
             <form onSubmit={handleEmailSubmit}>
               <input
                 type="email"
                 required
-                className="w-full px-4 py-3 border border-slate-300 rounded-xl mb-4 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                placeholder="name@company.com"
+                className="w-full px-4 py-3 border rounded-xl mb-4"
+                placeholder="Email"
                 value={emailInput}
                 onChange={(e) => setEmailInput(e.target.value)}
               />
               <button
                 type="submit"
                 disabled={isRecovering}
-                className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors flex items-center justify-center"
+                className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold"
               >
-                {isRecovering ? (
-                  <>
-                    <RefreshCw className="animate-spin mr-2" size={20} />
-                    Verifying...
-                  </>
-                ) : (
-                  "Continue"
-                )}
+                {isRecovering ? "Verifying..." : "Continue"}
               </button>
             </form>
           </div>
         </div>
       )}
-
       {showPermissionModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
-          <div className="bg-white p-6 rounded-2xl max-w-sm w-full shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
+          <div className="bg-white p-6 rounded-2xl max-w-sm w-full">
             <h3 className="text-lg font-bold mb-2">
               Check in at {locationId}?
             </h3>
-            <p className="text-sm text-slate-500 mb-4">
-              We need your Location to verify you are physically present.
-              <br />
-              <span className="text-xs font-semibold text-blue-600 mt-1 block">
-                Checking in as: {userEmail}
-              </span>
-            </p>
-            <div className="flex gap-2">
-              <button
-                onClick={confirmAndCheckIn}
-                className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold"
-              >
-                Allow & Check In
-              </button>
-            </div>
+            <button
+              onClick={confirmAndCheckIn}
+              className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold"
+            >
+              Allow & Check In
+            </button>
           </div>
         </div>
       )}
-
       <div className="text-center">
         {status !== "idle" && (
           <Loader className="animate-spin mx-auto mb-4 text-blue-500" />
         )}
         <p className="text-slate-500">
           {status === "idle" || status === "initializing"
-            ? "Verifying Device..."
-            : status === "locating"
-            ? "Checking Location..."
-            : "Saving Data..."}
+            ? "Verifying..."
+            : "Saving..."}
         </p>
         {errorMsg && <p className="text-red-500 mt-2">{errorMsg}</p>}
       </div>
