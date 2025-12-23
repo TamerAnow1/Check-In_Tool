@@ -32,9 +32,9 @@ import {
   Zap,
   LogOut,
   Maximize,
-  Clock, // Icon for timeout
-  AlertTriangle, // Icon for warning
-  Smartphone, // Icon for scanner
+  Clock,
+  AlertTriangle,
+  Smartphone,
 } from "lucide-react";
 
 // --- CONFIGURATION ---
@@ -49,13 +49,8 @@ const firebaseConfig = {
 };
 
 // --- TIMEOUT SETTINGS ---
-// Set TEST_MODE = true to test quickly (15 seconds)
-// Set TEST_MODE = false for the real 5-minute timer
 const TEST_MODE = false; 
-
-// 5 Minutes (in ms) if Production, or 15 Seconds if Testing
 const INACTIVITY_LIMIT_MS = TEST_MODE ? 15000 : 5 * 60 * 1000; 
-// 15 Seconds Countdown for the Popup
 const POPUP_COUNTDOWN_SEC = 15;
 
 const COLLECTION_NAME = "checkins";
@@ -193,7 +188,7 @@ function LandingScreen({ onSelect }) {
   );
 }
 
-// --- SCREEN 2: KIOSK (THE WATCHDOG) ---
+// --- SCREEN 2: KIOSK ---
 function KioskScreen({ isReady, locationId }) {
   const [token, setToken] = useState("");
   const [timeLeft, setTimeLeft] = useState(TOKEN_VALIDITY_SECONDS);
@@ -204,43 +199,35 @@ function KioskScreen({ isReady, locationId }) {
   const [wakeLockActive, setWakeLockActive] = useState(false);
   const [loadTime] = useState(Date.now());
 
-  // ✅ 1. CREATE A REF TO HOLD LATEST DATA (For Watchdog)
+  // Watchdog Ref
   const scansRef = useRef(recentScans);
   useEffect(() => { scansRef.current = recentScans; }, [recentScans]);
 
-  // ✅ 2. THE WATCHDOG (Checks every 10 seconds)
+  // Watchdog
   useEffect(() => {
     if (!isReady || !db) return;
-
     const cleanupInterval = setInterval(async () => {
       const now = Date.now();
-      const currentScans = scansRef.current; // Read from Ref
-
+      const currentScans = scansRef.current; 
       currentScans.forEach(async (user) => {
-        // Only check "waiting" users
         if (user.status === "waiting") {
           const lastActive = user.lastActive?.toMillis() || user.timestamp?.toMillis() || 0;
-          // Add buffer: 5 mins + 30 seconds to allow latency
           if (now - lastActive > INACTIVITY_LIMIT_MS + 30000) {
             console.log(`Watchdog: Kicking user ${user.userName}`);
-            try {
-              await updateDoc(doc(db, COLLECTION_NAME, user.id), { status: "abandoned" });
-            } catch (e) { console.error("Watchdog failed", e); }
+            try { await updateDoc(doc(db, COLLECTION_NAME, user.id), { status: "abandoned" }); } 
+            catch (e) { console.error("Watchdog failed", e); }
           }
         }
       });
     }, 10000); 
-
     return () => clearInterval(cleanupInterval);
   }, [isReady]);
 
-  // Toggle Fullscreen
   const toggleFullScreen = () => {
     if (!document.fullscreenElement) { document.documentElement.requestFullscreen(); } 
     else { if (document.exitFullscreen) document.exitFullscreen(); }
   };
 
-  // Wake Lock
   useEffect(() => {
     let wakeLock = null;
     const requestWakeLock = async () => {
@@ -253,7 +240,6 @@ function KioskScreen({ isReady, locationId }) {
     return () => { document.removeEventListener("visibilitychange", handleVisibilityChange); if (wakeLock) wakeLock.release(); };
   }, []);
 
-  // Remote Refresh
   useEffect(() => {
     if (!isReady || !db) return;
     const unsub = onSnapshot(doc(db, SYSTEM_COLLECTION, "global_commands"), (docSnap) => {
@@ -306,7 +292,6 @@ function KioskScreen({ isReady, locationId }) {
     if (!isReady || !db) return;
     const safeQ = query(collection(db, COLLECTION_NAME), where("locationId", "==", locationId));
     const unsubscribe = onSnapshot(safeQ, (snapshot) => {
-      // Don't show abandoned/completed users in the main list
       const allScans = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
         .filter(u => u.status === 'waiting' || u.status === 'active');
       allScans.sort((a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0));
@@ -352,14 +337,18 @@ function KioskScreen({ isReady, locationId }) {
   );
 }
 
-// --- SCREEN 3: ADMIN DASHBOARD ---
+// --- SCREEN 3: ADMIN DASHBOARD (UPDATED) ---
 function AdminScreen({ isReady, onBack }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
   const [authError, setAuthError] = useState("");
   const [scans, setScans] = useState([]);
+  
+  // ✅ FILTERS
   const [filterLoc, setFilterLoc] = useState("ALL");
   const [filterDate, setFilterDate] = useState(new Date().toISOString().split("T")[0]);
+  const [dateMode, setDateMode] = useState("DAY"); // 'DAY' or 'WEEK'
+  
   const [isRefreshingKiosks, setIsRefreshingKiosks] = useState(false);
 
   const handleLogin = (e) => { e.preventDefault(); if (passwordInput === "Anowforthewin") setIsAuthenticated(true); else setAuthError("Incorrect Password"); };
@@ -368,42 +357,123 @@ function AdminScreen({ isReady, onBack }) {
     setIsRefreshingKiosks(true);
     try { await setDoc(doc(db, SYSTEM_COLLECTION, "global_commands"), { forceRefreshTimestamp: serverTimestamp() }, { merge: true }); alert("Signal Sent!"); } catch (e) { alert("Failed."); } finally { setIsRefreshingKiosks(false); }
   };
+
+  const applyFilters = (rawDocs) => {
+    let data = rawDocs;
+    
+    // 1. Store Filter
+    if (filterLoc !== "ALL") {
+      data = data.filter((d) => d.locationId === filterLoc);
+    }
+
+    // 2. Date/Week Filter
+    if (filterDate) {
+      const selectedStart = new Date(filterDate);
+      selectedStart.setHours(0,0,0,0); // Start of selected day
+
+      const selectedEnd = new Date(selectedStart);
+      if (dateMode === "WEEK") {
+        selectedEnd.setDate(selectedEnd.getDate() + 7); // Add 7 days
+      } else {
+        selectedEnd.setDate(selectedEnd.getDate() + 1); // Add 1 day (End of same day)
+      }
+
+      data = data.filter((d) => {
+        if (!d.timestamp) return false;
+        const scanTime = d.timestamp.toDate();
+        return scanTime >= selectedStart && scanTime < selectedEnd;
+      });
+    }
+    return data;
+  };
+
   const handleExport = async () => {
     if (!isReady || !db) return;
     const q = query(collection(db, COLLECTION_NAME));
     const snapshot = await getDocs(q);
     let data = snapshot.docs.map((doc) => doc.data());
-    if (filterLoc !== "ALL") data = data.filter((d) => d.locationId === filterLoc);
-    if (filterDate) { const sDate = new Date(filterDate).toDateString(); data = data.filter((d) => d.timestamp?.toDate().toDateString() === sDate); }
+    
+    data = applyFilters(data); // Apply same filters as view
     data.sort((a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0));
-    const csvContent = [["Location", "Queue Number", "Name", "Time", "Status"].join(","), ...data.map((d) => [d.locationId, d.queueNumber, `"${d.userName}"`, d.timestamp?.toDate().toLocaleTimeString(), d.status || "waiting"].join(","))].join("\n");
+    
+    const csvContent = [["Location", "Queue Number", "Name", "Time", "Status"].join(","), ...data.map((d) => [d.locationId, d.queueNumber, `"${d.userName}"`, d.timestamp?.toDate().toLocaleString(), d.status || "waiting"].join(","))].join("\n");
     const a = document.createElement("a"); a.href = window.URL.createObjectURL(new Blob([csvContent], { type: "text/csv" })); a.download = `Report.csv`; a.click();
   };
 
   useEffect(() => {
     if (!isReady || !db || !isAuthenticated) return;
-    const q = query(collection(db, COLLECTION_NAME));
+    const q = query(collection(db, COLLECTION_NAME)); // Fetch ALL
     const unsubscribe = onSnapshot(q, (snapshot) => {
       let data = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-      if (filterLoc !== "ALL") data = data.filter((d) => d.locationId === filterLoc);
-      if (filterDate) { const sDate = new Date(filterDate).toDateString(); data = data.filter((d) => d.timestamp?.toDate().toDateString() === sDate); }
+      data = applyFilters(data); // Filter in JS
       data.sort((a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0));
-      setScans(data.slice(0, 200));
+      setScans(data); // ✅ NO .slice(0,200) LIMIT!
     });
     return () => unsubscribe();
-  }, [isReady, filterLoc, filterDate, isAuthenticated]);
+  }, [isReady, filterLoc, filterDate, dateMode, isAuthenticated]);
 
   if (!isAuthenticated) return (
     <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6"><div className="bg-white p-8 rounded-xl shadow-lg max-w-sm w-full"><h2 className="text-2xl font-bold text-center text-slate-800 mb-6">Admin Access</h2><form onSubmit={handleLogin} className="space-y-4"><input type="password" className="w-full px-4 py-2 border rounded-lg" placeholder="Password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} autoFocus />{authError && <p className="text-red-500 text-sm text-center">{authError}</p>}<button type="submit" className="w-full py-3 bg-blue-600 text-white rounded-lg font-bold">Unlock</button><button type="button" onClick={onBack} className="w-full py-3 text-slate-500">Cancel</button></form></div></div>
   );
 
   return (
-    <div className="min-h-screen bg-slate-100 p-6"><div className="max-w-6xl mx-auto"><div className="flex justify-between items-center mb-8 gap-4"><button onClick={onBack} className="p-2 bg-white rounded-lg"><X size={20} /></button><h1 className="text-2xl font-bold">Admin Dashboard</h1></div><div className="flex gap-4 mb-8"><button onClick={handleRemoteRefresh} disabled={isRefreshingKiosks} className="px-4 py-2 bg-purple-600 text-white rounded-lg font-bold">{isRefreshingKiosks ? "Sending..." : "Force Refresh Kiosks"}</button><button onClick={handleExport} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold">Export CSV</button></div>
-      <div className="bg-white rounded-xl shadow-sm border overflow-hidden"><table className="w-full text-left"><thead className="bg-slate-50 border-b"><tr><th className="px-6 py-4">Loc</th><th className="px-6 py-4">#</th><th className="px-6 py-4">User</th><th className="px-6 py-4">Status</th></tr></thead><tbody className="divide-y">{scans.map((s) => (<tr key={s.id}><td className="px-6 py-4">{s.locationId}</td><td className="px-6 py-4 font-bold">#{s.queueNumber}</td><td className="px-6 py-4">{s.userName}</td><td className="px-6 py-4"><span className={`px-2 py-1 rounded text-xs ${s.status === 'completed' ? 'bg-gray-100 text-gray-500' : s.status === 'abandoned' ? 'bg-red-100 text-red-500' : 'bg-green-100 text-green-700'}`}>{s.status || "waiting"}</span></td></tr>))}</tbody></table></div></div></div>
+    <div className="min-h-screen bg-slate-100 p-6"><div className="max-w-6xl mx-auto">
+      <div className="flex justify-between items-center mb-8 gap-4">
+        <button onClick={onBack} className="p-2 bg-white rounded-lg"><X size={20} /></button>
+        <h1 className="text-2xl font-bold">Admin Dashboard</h1>
+      </div>
+      
+      {/* CONTROLS */}
+      <div className="flex flex-wrap gap-4 mb-8 bg-white p-4 rounded-xl shadow-sm">
+        <button onClick={handleRemoteRefresh} disabled={isRefreshingKiosks} className="px-4 py-2 bg-purple-600 text-white rounded-lg font-bold flex items-center">{isRefreshingKiosks ? <Loader size={16} className="animate-spin mr-2"/> : <Zap size={16} className="mr-2"/>} Refresh Kiosks</button>
+        
+        {/* LOC FILTER */}
+        <div className="flex items-center border rounded-lg px-3 bg-slate-50">
+          <Filter size={16} className="text-slate-400 mr-2"/>
+          <select value={filterLoc} onChange={(e) => setFilterLoc(e.target.value)} className="bg-transparent py-2 outline-none">
+            <option value="ALL">All Stores</option>
+            {LOCATIONS.map(l => <option key={l} value={l}>{l}</option>)}
+          </select>
+        </div>
+
+        {/* DATE FILTER MODE */}
+        <div className="flex items-center border rounded-lg overflow-hidden">
+          <button onClick={() => setDateMode("DAY")} className={`px-3 py-2 text-sm font-bold ${dateMode==="DAY" ? "bg-blue-600 text-white" : "bg-slate-50 hover:bg-slate-100"}`}>Day View</button>
+          <button onClick={() => setDateMode("WEEK")} className={`px-3 py-2 text-sm font-bold ${dateMode==="WEEK" ? "bg-blue-600 text-white" : "bg-slate-50 hover:bg-slate-100"}`}>Week View</button>
+        </div>
+
+        {/* DATE PICKER */}
+        <div className="flex items-center border rounded-lg px-3 bg-slate-50">
+          <Calendar size={16} className="text-slate-400 mr-2"/>
+          <input type="date" value={filterDate} onChange={(e) => setFilterDate(e.target.value)} className="bg-transparent py-2 outline-none"/>
+        </div>
+
+        <div className="flex-1"></div>
+        <button onClick={handleExport} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold flex items-center"><Download size={16} className="mr-2"/> Export CSV</button>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
+        <div className="p-4 bg-slate-50 border-b flex justify-between text-sm font-semibold text-slate-500">
+          <span>Showing {scans.length} Records</span>
+          <span>Filter: {dateMode === "WEEK" ? "7 Days starting" : "Single Day"} {filterDate}</span>
+        </div>
+        <table className="w-full text-left"><thead className="bg-slate-50 border-b"><tr><th className="px-6 py-4">Loc</th><th className="px-6 py-4">#</th><th className="px-6 py-4">User</th><th className="px-6 py-4">Time</th><th className="px-6 py-4">Status</th></tr></thead><tbody className="divide-y">
+          {scans.map((s) => (
+            <tr key={s.id} className="hover:bg-slate-50">
+              <td className="px-6 py-4">{s.locationId}</td>
+              <td className="px-6 py-4 font-bold">#{s.queueNumber}</td>
+              <td className="px-6 py-4">{s.userName}</td>
+              <td className="px-6 py-4 text-sm text-slate-500">{s.timestamp?.toDate().toLocaleString()}</td>
+              <td className="px-6 py-4"><span className={`px-2 py-1 rounded text-xs uppercase font-bold ${s.status === 'completed' ? 'bg-gray-200 text-gray-600' : s.status === 'abandoned' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-700'}`}>{s.status || "waiting"}</span></td>
+            </tr>
+          ))}
+        </tbody></table>
+      </div>
+    </div></div>
   );
 }
 
-// --- SCREEN 4: SCANNER (Updated with Inactivity Modal) ---
+// --- SCREEN 4: SCANNER (Unchanged) ---
 function ScannerScreen({ token, locationId, isReady, user }) {
   const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
@@ -427,7 +497,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
   const [statusFromDB, setStatusFromDB] = useState("waiting");
 
-  // ✅ 1. HEARTBEAT (Ping DB every 1 min if active)
   useEffect(() => {
     if (status === "success" && myDocId && !isCheckedOut && !showInactivityModal) {
       const beat = setInterval(async () => {
@@ -439,7 +508,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     }
   }, [status, myDocId, isCheckedOut, showInactivityModal]);
 
-  // ✅ 2. LISTEN FOR STATUS CHANGE (If Watchdog kicks me, I need to know)
   useEffect(() => {
     if (myDocId) {
       const unsub = onSnapshot(doc(db, COLLECTION_NAME, myDocId), (docSnap) => {
@@ -455,11 +523,9 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     }
   }, [myDocId]);
 
-  // ✅ 3. LOCAL INACTIVITY MONITOR (Popup Logic)
   useEffect(() => {
     if (status !== "success" || isCheckedOut || !myDocId) return;
     const interval = setInterval(() => {
-      // If user hasn't touched screen in X mins
       if (Date.now() - lastInteraction > INACTIVITY_LIMIT_MS) {
         if (!showInactivityModal) {
           setShowInactivityModal(true);
@@ -470,14 +536,13 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     return () => clearInterval(interval);
   }, [status, lastInteraction, showInactivityModal, myDocId, isCheckedOut]);
 
-  // ✅ 4. COUNTDOWN TIMER (Inside Modal)
   useEffect(() => {
     if (!showInactivityModal) return;
     const timer = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
           clearInterval(timer);
-          handleUserTimeout(); // Time is up!
+          handleUserTimeout(); 
           return 0;
         }
         return prev - 1;
@@ -486,7 +551,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     return () => clearInterval(timer);
   }, [showInactivityModal]);
 
-  // Handle Timeout (Mark as Abandoned)
   const handleUserTimeout = async () => {
     setShowInactivityModal(false);
     setIsCheckedOut(true);
@@ -496,16 +560,14 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     }
   };
 
-  // Handle "I'M HERE"
   const handleUserPresent = async () => {
     setShowInactivityModal(false);
-    setLastInteraction(Date.now()); // Reset clock
+    setLastInteraction(Date.now()); 
     if (db && myDocId) {
       await updateDoc(doc(db, COLLECTION_NAME, myDocId), { lastActive: serverTimestamp() });
     }
   };
 
-  // Interaction Reset (Touch = Alive)
   useEffect(() => {
     const resetTimer = () => { if (!showInactivityModal) setLastInteraction(Date.now()); };
     window.addEventListener("click", resetTimer);
@@ -516,7 +578,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     };
   }, [showInactivityModal]);
 
-  // Sound Logic
   useEffect(() => {
     if (status === "success" && !isCheckedOut && peopleAhead === 0) {
       const audio = new Audio("https://actions.google.com/sounds/v1/alarms/beep_short.ogg");
@@ -524,7 +585,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     }
   }, [peopleAhead, status, isCheckedOut]);
 
-  // Queue Counter
   useEffect(() => {
     if (status === "success" && myQueueNumber && !isCheckedOut && isReady && db) {
       const q = query(collection(db, COLLECTION_NAME), where("locationId", "==", locationId), where("status", "==", "waiting"));
@@ -536,7 +596,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     }
   }, [status, myQueueNumber, isCheckedOut, locationId, isReady]);
 
-  // Manual Checkout
   const handleCheckout = async () => {
     if (!myDocId) return;
     setIsCheckingOut(true);
@@ -546,7 +605,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     } catch (e) { alert("Error"); } finally { setIsCheckingOut(false); }
   };
 
-  // ID & Checkin Logic
   const generateNativeFingerprint = async () => "fp_" + Math.random().toString(36).substr(2, 9);
 
   useEffect(() => {
