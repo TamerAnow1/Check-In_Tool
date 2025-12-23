@@ -30,10 +30,10 @@ import {
   Mail,
   RefreshCw,
   Zap,
-  Clock, // Icon for timeout
-  AlertTriangle, // Icon for warning
+  Clock,
+  AlertTriangle,
+  Smartphone, // <--- This was missing!
 } from "lucide-react";
-
 // --- CONFIGURATION ---
 const firebaseConfig = {
   apiKey: "AIzaSyD8eWUJQD8_LS8Be0seSpIRovBMzV-chO8",
