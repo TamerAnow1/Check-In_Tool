@@ -40,6 +40,7 @@ import {
   RefreshCw,
   Zap,
   LogOut,
+  Maximize, // New Icon for Fullscreen
 } from "lucide-react";
 
 // --- CONFIGURATION ---
@@ -254,7 +255,7 @@ function LandingScreen({ onSelect }) {
   );
 }
 
-// --- SCREEN 2: KIOSK ---
+// --- SCREEN 2: KIOSK (Visual Updates) ---
 function KioskScreen({ isReady, locationId }) {
   const [token, setToken] = useState("");
   const [timeLeft, setTimeLeft] = useState(TOKEN_VALIDITY_SECONDS);
@@ -264,6 +265,17 @@ function KioskScreen({ isReady, locationId }) {
   const [isDownloading, setIsDownloading] = useState(false);
   const [wakeLockActive, setWakeLockActive] = useState(false);
   const [loadTime] = useState(Date.now());
+
+  // Full Screen Toggle
+  const toggleFullScreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen();
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      }
+    }
+  };
 
   // Wake Lock
   useEffect(() => {
@@ -306,7 +318,6 @@ function KioskScreen({ isReady, locationId }) {
     return () => unsub();
   }, [isReady, loadTime]);
 
-  // CSV Export
   const handleDownloadCSV = async () => {
     if (!isReady || !db) return;
     setIsDownloading(true);
@@ -399,74 +410,89 @@ function KioskScreen({ isReady, locationId }) {
   }, [isReady, locationId]);
 
   return (
-    <div className="flex flex-col md:flex-row h-screen bg-slate-900 text-white">
+    <div className="flex flex-col md:flex-row h-screen bg-slate-900 text-white overflow-hidden">
+      {/* LEFT SIDE: QR CODE */}
       <div className="flex-1 flex flex-col items-center justify-center p-8 border-r border-slate-700 relative">
         <div className="absolute top-6 left-6 bg-blue-600 px-4 py-2 rounded-lg font-bold flex items-center shadow-lg">
           <Building size={18} className="mr-2" /> {locationId}
         </div>
-        <div
-          className={`absolute top-6 right-6 px-3 py-1 rounded-full text-xs font-mono flex items-center border ${
-            wakeLockActive
-              ? "bg-green-900/30 border-green-500 text-green-400"
-              : "bg-red-900/30 border-red-500 text-red-400"
-          }`}
+
+        {/* FULLSCREEN BUTTON */}
+        <button
+          onClick={toggleFullScreen}
+          className="absolute top-6 right-6 bg-slate-800 hover:bg-slate-700 p-2 rounded-full border border-slate-600 transition-colors"
+          title="Enter Full Screen"
         >
-          <Zap size={12} className="mr-1" />
-          {wakeLockActive ? "ALWAYS ON" : "NORMAL PWR"}
-        </div>
-        <h2 className="text-2xl font-bold mb-8 tracking-wider">
+          <Maximize size={20} />
+        </button>
+
+        <h2 className="text-3xl font-bold mb-10 tracking-wider">
           SCAN TO CHECK IN
         </h2>
+
         {!isUrlValid && (
-          <div className="absolute top-20 left-4 right-4 bg-yellow-500/20 border border-yellow-500 text-yellow-100 p-3 rounded-lg text-sm flex items-start gap-2 text-left">
+          <div className="absolute top-24 left-1/2 -translate-x-1/2 bg-yellow-500/20 border border-yellow-500 text-yellow-100 p-3 rounded-lg text-sm flex items-start gap-2 text-left">
             <Info size={18} className="mt-0.5 flex-shrink-0" />
             <div>
               <strong>Preview Mode:</strong> This QR uses a fallback URL.
             </div>
           </div>
         )}
-        <div className="bg-white p-4 rounded-xl shadow-2xl shadow-blue-500/20 w-64 h-64 flex items-center justify-center">
+
+        {/* ✅ UPDATED QR CONTAINER: MUCH LARGER */}
+        <div className="bg-white p-4 rounded-3xl shadow-2xl shadow-blue-500/20 w-[500px] h-[500px] flex items-center justify-center border-[10px] border-white">
           {scanUrl ? (
             <img
-              src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(
+              src={`https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(
                 scanUrl
               )}`}
               alt="Scan this QR code"
               className="w-full h-full object-contain"
             />
           ) : (
-            <Loader className="text-slate-400 animate-spin" />
+            <Loader className="text-slate-400 animate-spin" size={64} />
           )}
         </div>
-        <div className="mt-8 text-center">
-          <div className="text-4xl font-mono font-bold text-blue-400">
+
+        <div className="mt-12 text-center">
+          <div className="text-6xl font-mono font-bold text-blue-400">
             {timeLeft}s
           </div>
-          <p className="text-slate-400 text-sm mt-2">
+          <p className="text-slate-400 text-lg mt-2">
             Code refreshes automatically
           </p>
         </div>
       </div>
-      <div className="w-full md:w-96 bg-slate-800 p-6 overflow-hidden flex flex-col">
-        <div className="flex items-center justify-between mb-6">
-          <h3 className="text-xl font-bold flex items-center">
+
+      {/* RIGHT SIDE: FEED */}
+      <div className="w-full md:w-[450px] bg-slate-800 p-6 flex flex-col border-l border-slate-700 shadow-2xl z-10">
+        <div className="flex items-center justify-between mb-8">
+          <h3 className="text-2xl font-bold flex items-center">
             <div className="w-3 h-3 bg-green-500 rounded-full mr-3 animate-pulse"></div>
             {locationId} Feed
           </h3>
-          <button
-            onClick={handleDownloadCSV}
-            disabled={!isReady || isDownloading}
-            className="flex items-center px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
-          >
-            {isDownloading ? (
-              <Loader size={14} className="animate-spin" />
-            ) : (
-              <Download size={14} />
+          <div className="flex gap-2">
+            {wakeLockActive && (
+              <div className="px-2 py-1 bg-green-900/30 border border-green-500 text-green-400 text-[10px] rounded uppercase font-bold flex items-center">
+                <Zap size={10} className="mr-1" /> ON
+              </div>
             )}
-            <span className="ml-2">CSV</span>
-          </button>
+            <button
+              onClick={handleDownloadCSV}
+              disabled={!isReady || isDownloading}
+              className="flex items-center px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
+            >
+              {isDownloading ? (
+                <Loader size={14} className="animate-spin" />
+              ) : (
+                <Download size={14} />
+              )}
+              <span className="ml-2">CSV</span>
+            </button>
+          </div>
         </div>
-        <div className="flex-1 overflow-y-auto space-y-4">
+
+        <div className="flex-1 overflow-y-auto space-y-4 pr-2">
           {!isReady ? (
             <div className="text-center text-slate-500 mt-10">
               <Loader className="animate-spin mx-auto mb-2" /> Connecting...
@@ -479,21 +505,23 @@ function KioskScreen({ isReady, locationId }) {
             recentScans.map((scan) => (
               <div
                 key={scan.id}
-                className="bg-slate-700 p-4 rounded-lg border-l-4 border-green-500 animate-in fade-in slide-in-from-right duration-500"
+                className="bg-slate-700 p-5 rounded-xl border-l-4 border-green-500 animate-in fade-in slide-in-from-right duration-500 shadow-sm"
               >
-                <div className="flex justify-between items-start">
+                <div className="flex justify-between items-center">
                   <div>
-                    <div className="font-bold text-white">{scan.userName}</div>
-                    <div className="text-slate-300 text-xs mt-1">
+                    <div className="font-bold text-white text-lg">
+                      {scan.userName}
+                    </div>
+                    <div className="text-slate-300 text-sm mt-1">
                       {scan.timestamp?.toDate().toLocaleTimeString()}
                     </div>
                   </div>
                   <div className="flex flex-col items-end">
-                    <div className="bg-slate-800 px-3 py-1 rounded text-green-400 font-mono font-bold text-lg">
+                    <div className="bg-slate-800 px-4 py-2 rounded-lg text-green-400 font-mono font-bold text-2xl border border-slate-600">
                       #{scan.queueNumber}
                     </div>
                     {scan.status === "completed" && (
-                      <span className="text-[10px] text-slate-400 mt-1 uppercase tracking-wider">
+                      <span className="text-[10px] text-slate-400 mt-1 uppercase tracking-wider font-bold">
                         Checked Out
                       </span>
                     )}
@@ -508,7 +536,7 @@ function KioskScreen({ isReady, locationId }) {
   );
 }
 
-// --- SCREEN 3: ADMIN DASHBOARD ---
+// --- SCREEN 3: ADMIN DASHBOARD (Unchanged) ---
 function AdminScreen({ isReady, onBack }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
@@ -766,7 +794,7 @@ function AdminScreen({ isReady, onBack }) {
   );
 }
 
-// --- SCREEN 4: SCANNER (Updated with Robust Queue Counting) ---
+// --- SCREEN 4: SCANNER (With Sound Notification) ---
 function ScannerScreen({ token, locationId, isReady, user }) {
   const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
@@ -776,7 +804,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   const [myQueueNumber, setMyQueueNumber] = useState(null);
   const [myDocId, setMyDocId] = useState(null);
 
-  // Queue States
   const [peopleAhead, setPeopleAhead] = useState(0);
   const [isCheckedOut, setIsCheckedOut] = useState(false);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
@@ -785,6 +812,21 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   const [showPermissionModal, setShowPermissionModal] = useState(false);
   const [isRecovering, setIsRecovering] = useState(false);
   const [emailInput, setEmailInput] = useState("");
+
+  // ✅ SOUND NOTIFICATION LOGIC
+  useEffect(() => {
+    if (status === "success" && !isCheckedOut && peopleAhead === 0) {
+      // Simple "Ding" sound
+      const audio = new Audio(
+        "https://actions.google.com/sounds/v1/alarms/beep_short.ogg"
+      );
+      audio
+        .play()
+        .catch((e) =>
+          console.log("Audio play failed (user interaction needed first)", e)
+        );
+    }
+  }, [peopleAhead, status, isCheckedOut]);
 
   const generateNativeFingerprint = async () => {
     const components = [
@@ -838,9 +880,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     identifyDevice();
   }, [isReady]);
 
-  // ✅ ROBUST QUEUE COUNTER
-  // Instead of a complex database query that fails without an index,
-  // we download all "waiting" users for this location and count them in JS.
+  // QUEUE COUNTER
   useEffect(() => {
     if (
       status === "success" &&
@@ -853,19 +893,14 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         collection(db, COLLECTION_NAME),
         where("locationId", "==", locationId),
         where("status", "==", "waiting")
-        // Note: Removed the "queueNumber < myQueueNumber" filter here.
-        // We will do that filtering in JavaScript below. This prevents Indexing errors.
       );
-
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const waitingUsers = snapshot.docs.map((d) => d.data());
-        // Filter: Count how many waiting users have a smaller number than me
         const count = waitingUsers.filter(
           (user) => user.queueNumber < myQueueNumber
         ).length;
         setPeopleAhead(count);
       });
-
       return () => unsubscribe();
     }
   }, [status, myQueueNumber, isCheckedOut, locationId, isReady]);
