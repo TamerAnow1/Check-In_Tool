@@ -32,13 +32,13 @@ import {
   Zap,
   LogOut,
   Maximize,
-  Clock, // Icon for timeout
-  AlertTriangle, // Icon for warning
-  Smartphone, // Icon for scanner
-  Users, // Icon for waiting count
-  CheckSquare, // Icon for completed
-  XCircle, // Icon for abandoned
-  Trash2, // Icon for kick
+  Clock,
+  AlertTriangle,
+  Smartphone,
+  Users,
+  CheckSquare,
+  XCircle,
+  Trash2,
 } from "lucide-react";
 
 // --- CONFIGURATION ---
@@ -54,8 +54,7 @@ const firebaseConfig = {
 
 // --- TIMEOUT SETTINGS ---
 const TEST_MODE = false;
-// 1. MODIFIED: Changed 5 minutes to 10 minutes
-const INACTIVITY_LIMIT_MS = TEST_MODE ? 15000 : 10 * 60 * 1000;
+const INACTIVITY_LIMIT_MS = TEST_MODE ? 15000 : 10 * 60 * 1000; // 10 Minutes
 const POPUP_COUNTDOWN_SEC = 15;
 
 const COLLECTION_NAME = "checkins";
@@ -242,7 +241,7 @@ function LandingScreen({ onSelect }) {
   );
 }
 
-// --- SCREEN 2: KIOSK (THE WATCHDOG) ---
+// --- SCREEN 2: KIOSK ---
 function KioskScreen({ isReady, locationId }) {
   const [token, setToken] = useState("");
   const [timeLeft, setTimeLeft] = useState(TOKEN_VALIDITY_SECONDS);
@@ -253,13 +252,11 @@ function KioskScreen({ isReady, locationId }) {
   const [wakeLockActive, setWakeLockActive] = useState(false);
   const [loadTime] = useState(Date.now());
 
-  // Watchdog Ref
   const scansRef = useRef(recentScans);
   useEffect(() => {
     scansRef.current = recentScans;
   }, [recentScans]);
 
-  // Watchdog
   useEffect(() => {
     if (!isReady || !db) return;
     const cleanupInterval = setInterval(async () => {
@@ -346,6 +343,7 @@ function KioskScreen({ isReady, locationId }) {
         (a, b) =>
           (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
       );
+      // CSV GENERATION (KIOSK)
       const csvContent = [
         ["Queue Number", "Name", "Date", "Time", "Device ID", "Status"].join(
           ","
@@ -531,13 +529,13 @@ function KioskScreen({ isReady, locationId }) {
   );
 }
 
-// --- SCREEN 3: ADMIN DASHBOARD (UPDATED) ---
+// --- SCREEN 3: ADMIN DASHBOARD ---
 function AdminScreen({ isReady, onBack }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
   const [authError, setAuthError] = useState("");
   const [scans, setScans] = useState([]);
-  const [storeStats, setStoreStats] = useState({}); // Stores aggregated data
+  const [storeStats, setStoreStats] = useState({});
 
   const [filterLoc, setFilterLoc] = useState("ALL");
   const [filterDate, setFilterDate] = useState(
@@ -570,7 +568,6 @@ function AdminScreen({ isReady, onBack }) {
     }
   };
 
-  // 4. MODIFIED: Added function to force kick a user
   const handleKickUser = async (userDocId) => {
     if (!db) return;
     if (
@@ -611,45 +608,42 @@ function AdminScreen({ isReady, onBack }) {
     return data;
   };
 
-  // ✅ AGGREGATION LOGIC (MODIFIED FOR UNIQUE CHECK-INS)
+  // ✅ AGGREGATION LOGIC (UPDATED: INCLUDE ABANDONED IN UNIQUE COUNT)
   const calculateStoreStats = (filteredData) => {
-    // 2. MODIFIED: Using Sets to track unique users for Completed/Abandoned
     const stats = {};
 
-    // Initialize all locations
     LOCATIONS.forEach((loc) => {
       stats[loc] = {
-        waiting: 0, // Keep counting individual tickets for current wait
-        completed: new Set(), // Set for unique users
-        abandoned: new Set(), // Set for unique users
+        waiting: 0,
+        unique_all: new Set(), // Green Box: ALL Unique visitors (including abandoned)
+        abandoned: new Set(), // Red Box: Unique visitors who abandoned
       };
     });
 
     filteredData.forEach((d) => {
       if (stats[d.locationId]) {
-        // Use userEmail (userName) or deviceId as unique identifier
+        // ID Priority: UserName -> DeviceID -> Unknown
         const uniqueId = d.userName || d.deviceId || "unknown";
-
-        // Normalize status
         let status = d.status || "waiting";
-        if (status === "active") status = "waiting";
 
-        if (status === "waiting") {
+        // ALWAYS add to "unique_all" regardless of status
+        stats[d.locationId].unique_all.add(uniqueId);
+
+        // Specific Counters
+        if (status === "waiting" || status === "active") {
           stats[d.locationId].waiting++;
-        } else if (status === "completed") {
-          stats[d.locationId].completed.add(uniqueId);
         } else if (status === "abandoned") {
           stats[d.locationId].abandoned.add(uniqueId);
         }
       }
     });
 
-    // Convert Sets to size for rendering
     const finalStats = {};
     LOCATIONS.forEach((loc) => {
       finalStats[loc] = {
         waiting: stats[loc].waiting,
-        completed: stats[loc].completed.size,
+        // Green Box Count = Total Unique Visitors (Waiting + Completed + Abandoned)
+        completed: stats[loc].unique_all.size,
         abandoned: stats[loc].abandoned.size,
       };
     });
@@ -657,6 +651,7 @@ function AdminScreen({ isReady, onBack }) {
     setStoreStats(finalStats);
   };
 
+  // ✅ CSV EXPORT (FIXED HEADERS & DATA)
   const handleExport = async () => {
     if (!isReady || !db) return;
     const q = query(collection(db, COLLECTION_NAME));
@@ -668,26 +663,49 @@ function AdminScreen({ isReady, onBack }) {
       data = data.filter((d) => d.locationId === filterLoc);
 
     data.sort(
-      (a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
+      (a, b) =>
+        (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
     );
 
-    const csvContent = [
-      ["Location", "Queue Number", "Name", "Time", "Status"].join(","),
-      ...data.map((d) =>
-        [
-          d.locationId,
-          d.queueNumber,
-          `"${d.userName}"`,
-          d.timestamp?.toDate().toLocaleString(),
-          d.status || "waiting",
-        ].join(",")
-      ),
-    ].join("\n");
+    // HEADERS: Added Date, Time (Split), Device ID, Lat, Lng
+    const csvHeader = [
+      "Location",
+      "Queue Number",
+      "Name",
+      "Date",
+      "Time",
+      "Device ID",
+      "Status",
+      "Latitude",
+      "Longitude",
+    ].join(",");
+
+    const csvRows = data.map((d) => {
+      // Safely handle dates
+      const dateObj = d.timestamp ? d.timestamp.toDate() : null;
+      const dateStr = dateObj ? dateObj.toLocaleDateString() : "";
+      const timeStr = dateObj ? dateObj.toLocaleTimeString() : "";
+
+      // WRAP STRINGS IN QUOTES to prevent CSV comma splitting
+      return [
+        d.locationId,
+        d.queueNumber,
+        `"${d.userName || "Guest"}"`,
+        `"${dateStr}"`, // Separate Date
+        `"${timeStr}"`, // Separate Time
+        `"${d.deviceId || ""}"`, // Added Device ID
+        d.status || "waiting",
+        d.location?.lat || "", // Added Lat
+        d.location?.lng || "", // Added Lng
+      ].join(",");
+    });
+
+    const csvContent = [csvHeader, ...csvRows].join("\n");
     const a = document.createElement("a");
     a.href = window.URL.createObjectURL(
       new Blob([csvContent], { type: "text/csv" })
     );
-    a.download = `Report.csv`;
+    a.download = `Report_${new Date().toISOString().split("T")[0]}.csv`;
     a.click();
   };
 
@@ -700,13 +718,13 @@ function AdminScreen({ isReady, onBack }) {
         ...doc.data(),
       }));
 
-      // 1. Filter by Date First
+      // 1. Filter
       const dateFilteredData = applyFilters(rawData);
 
-      // 2. Calculate Stats based on DATE filtered data (showing all stores)
+      // 2. Stats
       calculateStoreStats(dateFilteredData);
 
-      // 3. Filter by Location for the TABLE view
+      // 3. Table Data
       let tableData = dateFilteredData;
       if (filterLoc !== "ALL") {
         tableData = tableData.filter((d) => d.locationId === filterLoc);
@@ -816,7 +834,6 @@ function AdminScreen({ isReady, onBack }) {
             />
           </div>
 
-          {/* Location Filter for Table Only */}
           <div className="flex items-center border rounded-lg px-3 bg-slate-50 ml-auto">
             <Filter size={16} className="text-slate-400 mr-2" />
             <select
@@ -840,10 +857,9 @@ function AdminScreen({ isReady, onBack }) {
           </button>
         </div>
 
-        {/* ✅ NEW: STORE STATS GRID */}
+        {/* ✅ STORE STATS GRID */}
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-8">
           {LOCATIONS.map((loc) => {
-            // If specific filter is applied, only show that store's card (or show all if ALL)
             if (filterLoc !== "ALL" && filterLoc !== loc) return null;
 
             const stat = storeStats[loc] || {
@@ -851,7 +867,6 @@ function AdminScreen({ isReady, onBack }) {
               completed: 0,
               abandoned: 0,
             };
-            // Only show card if there is at least some activity, OR if we are filtering for it specifically
             if (
               stat.waiting === 0 &&
               stat.completed === 0 &&
@@ -882,7 +897,6 @@ function AdminScreen({ isReady, onBack }) {
                     <div className="text-green-600 font-bold text-xl">
                       {stat.completed}
                     </div>
-                    {/* 3. MODIFIED: Renamed from DONE to UNIQUE CHECK-INS */}
                     <div className="text-[10px] text-green-400 font-bold uppercase">
                       Unique Check-Ins
                     </div>
@@ -915,7 +929,6 @@ function AdminScreen({ isReady, onBack }) {
                   <th className="px-6 py-4">User</th>
                   <th className="px-6 py-4">Time</th>
                   <th className="px-6 py-4">Status</th>
-                  {/* Added Action Column Header */}
                   <th className="px-6 py-4">Action</th>
                 </tr>
               </thead>
@@ -942,7 +955,6 @@ function AdminScreen({ isReady, onBack }) {
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      {/* 5. MODIFIED: Kick button for waiting users */}
                       {(s.status === "waiting" || s.status === "active") && (
                         <button
                           onClick={() => handleKickUser(s.id)}
