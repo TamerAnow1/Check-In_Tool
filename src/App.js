@@ -38,6 +38,7 @@ import {
   Users, // Icon for waiting count
   CheckSquare, // Icon for completed
   XCircle, // Icon for abandoned
+  Trash2, // Icon for kick
 } from "lucide-react";
 
 // --- CONFIGURATION ---
@@ -53,7 +54,8 @@ const firebaseConfig = {
 
 // --- TIMEOUT SETTINGS ---
 const TEST_MODE = false;
-const INACTIVITY_LIMIT_MS = TEST_MODE ? 15000 : 5 * 60 * 1000;
+// 1. MODIFIED: Changed 5 minutes to 10 minutes
+const INACTIVITY_LIMIT_MS = TEST_MODE ? 15000 : 10 * 60 * 1000;
 const POPUP_COUNTDOWN_SEC = 15;
 
 const COLLECTION_NAME = "checkins";
@@ -568,6 +570,26 @@ function AdminScreen({ isReady, onBack }) {
     }
   };
 
+  // 4. MODIFIED: Added function to force kick a user
+  const handleKickUser = async (userDocId) => {
+    if (!db) return;
+    if (
+      !window.confirm(
+        "Are you sure you want to kick this user from the queue? They will be marked as 'abandoned'."
+      )
+    )
+      return;
+
+    try {
+      await updateDoc(doc(db, COLLECTION_NAME, userDocId), {
+        status: "abandoned",
+      });
+    } catch (e) {
+      alert("Failed to kick user.");
+      console.error(e);
+    }
+  };
+
   const applyFilters = (rawDocs) => {
     let data = rawDocs;
     if (filterDate) {
@@ -589,27 +611,50 @@ function AdminScreen({ isReady, onBack }) {
     return data;
   };
 
-  // ✅ AGGREGATION LOGIC
+  // ✅ AGGREGATION LOGIC (MODIFIED FOR UNIQUE CHECK-INS)
   const calculateStoreStats = (filteredData) => {
+    // 2. MODIFIED: Using Sets to track unique users for Completed/Abandoned
     const stats = {};
 
     // Initialize all locations
     LOCATIONS.forEach((loc) => {
-      stats[loc] = { waiting: 0, completed: 0, abandoned: 0 };
+      stats[loc] = {
+        waiting: 0, // Keep counting individual tickets for current wait
+        completed: new Set(), // Set for unique users
+        abandoned: new Set(), // Set for unique users
+      };
     });
 
     filteredData.forEach((d) => {
       if (stats[d.locationId]) {
+        // Use userEmail (userName) or deviceId as unique identifier
+        const uniqueId = d.userName || d.deviceId || "unknown";
+
         // Normalize status
         let status = d.status || "waiting";
-        if (status === "active") status = "waiting"; // Treat active as waiting for stats
+        if (status === "active") status = "waiting";
 
-        if (status === "waiting") stats[d.locationId].waiting++;
-        else if (status === "completed") stats[d.locationId].completed++;
-        else if (status === "abandoned") stats[d.locationId].abandoned++;
+        if (status === "waiting") {
+          stats[d.locationId].waiting++;
+        } else if (status === "completed") {
+          stats[d.locationId].completed.add(uniqueId);
+        } else if (status === "abandoned") {
+          stats[d.locationId].abandoned.add(uniqueId);
+        }
       }
     });
-    setStoreStats(stats);
+
+    // Convert Sets to size for rendering
+    const finalStats = {};
+    LOCATIONS.forEach((loc) => {
+      finalStats[loc] = {
+        waiting: stats[loc].waiting,
+        completed: stats[loc].completed.size,
+        abandoned: stats[loc].abandoned.size,
+      };
+    });
+
+    setStoreStats(finalStats);
   };
 
   const handleExport = async () => {
@@ -650,7 +695,10 @@ function AdminScreen({ isReady, onBack }) {
     if (!isReady || !db || !isAuthenticated) return;
     const q = query(collection(db, COLLECTION_NAME));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      let rawData = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+      let rawData = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
 
       // 1. Filter by Date First
       const dateFilteredData = applyFilters(rawData);
@@ -834,8 +882,9 @@ function AdminScreen({ isReady, onBack }) {
                     <div className="text-green-600 font-bold text-xl">
                       {stat.completed}
                     </div>
+                    {/* 3. MODIFIED: Renamed from DONE to UNIQUE CHECK-INS */}
                     <div className="text-[10px] text-green-400 font-bold uppercase">
-                      Done
+                      Unique Check-Ins
                     </div>
                   </div>
                   <div className="bg-red-50 p-2 rounded-lg">
@@ -866,6 +915,8 @@ function AdminScreen({ isReady, onBack }) {
                   <th className="px-6 py-4">User</th>
                   <th className="px-6 py-4">Time</th>
                   <th className="px-6 py-4">Status</th>
+                  {/* Added Action Column Header */}
+                  <th className="px-6 py-4">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -889,6 +940,18 @@ function AdminScreen({ isReady, onBack }) {
                       >
                         {s.status || "waiting"}
                       </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      {/* 5. MODIFIED: Kick button for waiting users */}
+                      {(s.status === "waiting" || s.status === "active") && (
+                        <button
+                          onClick={() => handleKickUser(s.id)}
+                          title="Kick User"
+                          className="bg-red-50 text-red-600 p-2 rounded hover:bg-red-100 transition-colors"
+                        >
+                          <XCircle size={18} />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
