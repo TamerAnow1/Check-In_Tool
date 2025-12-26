@@ -39,6 +39,7 @@ import {
   CheckSquare,
   XCircle,
   Trash2,
+  MapPin, // Added for geo-location UI
 } from "lucide-react";
 
 // --- CONFIGURATION ---
@@ -57,6 +58,13 @@ const TEST_MODE = false;
 const INACTIVITY_LIMIT_MS = TEST_MODE ? 15000 : 10 * 60 * 1000; // 10 Minutes
 const POPUP_COUNTDOWN_SEC = 15;
 
+// --- GEO-FENCING CONFIG ---
+const GEOFENCE_RADIUS_METERS = 30;
+const LOCATIONS_COORDS = {
+  // Add other locations here in the future
+  QCA5: { lat: 30.004567, lng: 31.422211 },
+};
+
 const COLLECTION_NAME = "checkins";
 const COUNTER_COLLECTION = "counters";
 const DEVICES_COLLECTION = "registered_devices";
@@ -74,6 +82,24 @@ let auth = null;
 const formatNum = (n) => (n !== undefined && n !== null ? n.toString() : "");
 const formatDate = (d) => (d ? d.toLocaleDateString("en-US") : "");
 const formatTime = (d) => (d ? d.toLocaleTimeString("en-US") : "");
+
+// --- HELPER: CALCULATE DISTANCE (Haversine Formula) ---
+const haversineDistance = (coords1, coords2) => {
+  const toRad = (x) => (x * Math.PI) / 180;
+  const R = 6371e3; // Earth radius in meters
+
+  const dLat = toRad(coords2.lat - coords1.lat);
+  const dLon = toRad(coords2.lng - coords1.lng);
+  const lat1 = toRad(coords1.lat);
+  const lat2 = toRad(coords2.lat);
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c; // Distance in meters
+};
 
 export default function App() {
   const [mode, setMode] = useState(() => {
@@ -348,7 +374,6 @@ function KioskScreen({ isReady, locationId }) {
         (a, b) =>
           (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
       );
-      // CSV GENERATION (KIOSK)
       const csvContent = [
         ["Queue Number", "Name", "Date", "Time", "Device ID", "Status"].join(
           ","
@@ -613,28 +638,24 @@ function AdminScreen({ isReady, onBack }) {
     return data;
   };
 
-  // ✅ AGGREGATION LOGIC (UPDATED: INCLUDE ABANDONED IN UNIQUE COUNT)
   const calculateStoreStats = (filteredData) => {
     const stats = {};
 
     LOCATIONS.forEach((loc) => {
       stats[loc] = {
         waiting: 0,
-        unique_all: new Set(), // Green Box: ALL Unique visitors
-        abandoned: new Set(), // Red Box: Unique visitors who abandoned
+        unique_all: new Set(),
+        abandoned: new Set(),
       };
     });
 
     filteredData.forEach((d) => {
       if (stats[d.locationId]) {
-        // ID Priority: UserName -> DeviceID -> Unknown
         const uniqueId = d.userName || d.deviceId || "unknown";
         let status = d.status || "waiting";
 
-        // ALWAYS add to "unique_all" regardless of status
         stats[d.locationId].unique_all.add(uniqueId);
 
-        // Specific Counters
         if (status === "waiting" || status === "active") {
           stats[d.locationId].waiting++;
         } else if (status === "abandoned") {
@@ -647,7 +668,6 @@ function AdminScreen({ isReady, onBack }) {
     LOCATIONS.forEach((loc) => {
       finalStats[loc] = {
         waiting: stats[loc].waiting,
-        // Green Box Count = Total Unique Visitors
         completed: stats[loc].unique_all.size,
         abandoned: stats[loc].abandoned.size,
       };
@@ -656,7 +676,6 @@ function AdminScreen({ isReady, onBack }) {
     setStoreStats(finalStats);
   };
 
-  // ✅ CSV EXPORT (FIXED HEADERS & LOCALE)
   const handleExport = async () => {
     if (!isReady || !db) return;
     const q = query(collection(db, COLLECTION_NAME));
@@ -668,7 +687,8 @@ function AdminScreen({ isReady, onBack }) {
       data = data.filter((d) => d.locationId === filterLoc);
 
     data.sort(
-      (a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
+      (a, b) =>
+        (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
     );
 
     const csvHeader = [
@@ -715,19 +735,12 @@ function AdminScreen({ isReady, onBack }) {
         id: doc.id,
         ...doc.data(),
       }));
-
-      // 1. Filter
       const dateFilteredData = applyFilters(rawData);
-
-      // 2. Stats
       calculateStoreStats(dateFilteredData);
-
-      // 3. Table Data
       let tableData = dateFilteredData;
       if (filterLoc !== "ALL") {
         tableData = tableData.filter((d) => d.locationId === filterLoc);
       }
-
       tableData.sort(
         (a, b) =>
           (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
@@ -784,7 +797,6 @@ function AdminScreen({ isReady, onBack }) {
           <h1 className="text-2xl font-bold">Admin Dashboard</h1>
         </div>
 
-        {/* CONTROLS */}
         <div className="flex flex-wrap gap-4 mb-8 bg-white p-4 rounded-xl shadow-sm items-center">
           <button
             onClick={handleRemoteRefresh}
@@ -855,11 +867,9 @@ function AdminScreen({ isReady, onBack }) {
           </button>
         </div>
 
-        {/* ✅ STORE STATS GRID */}
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-8">
           {LOCATIONS.map((loc) => {
             if (filterLoc !== "ALL" && filterLoc !== loc) return null;
-
             const stat = storeStats[loc] || {
               waiting: 0,
               completed: 0,
@@ -872,7 +882,6 @@ function AdminScreen({ isReady, onBack }) {
               filterLoc === "ALL"
             )
               return null;
-
             return (
               <div
                 key={loc}
@@ -913,7 +922,6 @@ function AdminScreen({ isReady, onBack }) {
           })}
         </div>
 
-        {/* MASTER TABLE */}
         <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
           <div className="p-4 bg-slate-50 border-b flex justify-between text-sm font-semibold text-slate-500">
             <span>Detailed Logs ({scans.length})</span>
@@ -980,7 +988,7 @@ function AdminScreen({ isReady, onBack }) {
   );
 }
 
-// --- SCREEN 4: SCANNER (FIXED TURN LOGIC & ARABIC NUMBERS) ---
+// --- SCREEN 4: SCANNER (GEOFENCING MODIFIED) ---
 function ScannerScreen({ token, locationId, isReady, user }) {
   const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
@@ -991,7 +999,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   const [myDocId, setMyDocId] = useState(null);
   const [peopleAhead, setPeopleAhead] = useState(0);
   const [isCheckedOut, setIsCheckedOut] = useState(false);
-  const [isCheckingOut, setIsCheckingOut] = useState(false);
 
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [showPermissionModal, setShowPermissionModal] = useState(false);
@@ -1003,6 +1010,44 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   const [countdown, setCountdown] = useState(POPUP_COUNTDOWN_SEC);
 
   const [statusFromDB, setStatusFromDB] = useState("waiting");
+
+  // GEOFENCE WATCHER
+  useEffect(() => {
+    if (!myDocId || isCheckedOut) return;
+
+    // Only watch if this location has coordinates configured
+    const targetCoords = LOCATIONS_COORDS[locationId];
+    if (!targetCoords) return;
+
+    const watchId = navigator.geolocation.watchPosition(
+      async (position) => {
+        const userLat = position.coords.latitude;
+        const userLng = position.coords.longitude;
+        const dist = haversineDistance(
+          { lat: userLat, lng: userLng },
+          targetCoords
+        );
+
+        if (dist > GEOFENCE_RADIUS_METERS) {
+          // USER LEFT THE AREA
+          if (db && myDocId) {
+            try {
+              await updateDoc(doc(db, COLLECTION_NAME, myDocId), {
+                status: "abandoned",
+              });
+              setIsCheckedOut(true);
+            } catch (e) {
+              console.error("Geofence exit fail", e);
+            }
+          }
+        }
+      },
+      (err) => console.log("Geo watch error", err),
+      { enableHighAccuracy: true, maximumAge: 10000 }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [myDocId, isCheckedOut, locationId]);
 
   useEffect(() => {
     if (
@@ -1112,7 +1157,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     }
   }, [peopleAhead, status, isCheckedOut]);
 
-  // ✅ FIXED "IT'S YOUR TURN" LOGIC
   useEffect(() => {
     if (
       status === "success" &&
@@ -1121,9 +1165,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       isReady &&
       db
     ) {
-      // 1. Query for BOTH 'waiting' and 'active' users
-      // This prevents "active" users (who are still in the queue processing) from being hidden
-      // causing the next person to think they are first.
       const q = query(
         collection(db, COLLECTION_NAME),
         where("locationId", "==", locationId),
@@ -1138,22 +1179,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       return () => unsubscribe();
     }
   }, [status, myQueueNumber, isCheckedOut, locationId, isReady]);
-
-  const handleCheckout = async () => {
-    if (!myDocId) return;
-    setIsCheckingOut(true);
-    try {
-      await updateDoc(doc(db, COLLECTION_NAME, myDocId), {
-        status: "completed",
-        checkoutTime: serverTimestamp(),
-      });
-      setIsCheckedOut(true);
-    } catch (e) {
-      alert("Error");
-    } finally {
-      setIsCheckingOut(false);
-    }
-  };
 
   const generateNativeFingerprint = async () =>
     "fp_" + Math.random().toString(36).substr(2, 9);
@@ -1285,7 +1310,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
           </div>
           <h2 className="text-xl font-bold text-red-800 mb-2">Queue Timeout</h2>
           <p className="text-slate-600 mb-6">
-            You were removed due to inactivity.
+            You were removed due to inactivity or leaving the waiting area.
           </p>
           <button
             onClick={() => window.location.reload()}
@@ -1337,12 +1362,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
                 >
                   YES, I'M HERE!
                 </button>
-                <button
-                  onClick={handleCheckout}
-                  className="w-full py-3 bg-gray-200 text-gray-700 rounded-xl font-bold"
-                >
-                  Leave Queue
-                </button>
               </div>
             </div>
           </div>
@@ -1359,7 +1378,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
             {locationId} Ticket
           </div>
           <div className="text-6xl font-black text-slate-800">
-            {/* FORCE ENGLISH NUMBERS */}#{formatNum(myQueueNumber)}
+            #{formatNum(myQueueNumber)}
           </div>
           <div className="text-sm font-semibold text-blue-600 mt-2">
             {userEmail}
@@ -1379,18 +1398,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
             </div>
           </div>
         </div>
-        <button
-          onClick={handleCheckout}
-          disabled={isCheckingOut}
-          className="w-full max-w-xs py-4 bg-red-500 text-white rounded-xl font-bold shadow-lg flex items-center justify-center"
-        >
-          {isCheckingOut ? (
-            <Loader className="animate-spin mr-2" />
-          ) : (
-            <LogOut className="mr-2" />
-          )}{" "}
-          Checkout / Leave Queue
-        </button>
+        {/* CHECKOUT BUTTON REMOVED */}
       </div>
     );
   }
