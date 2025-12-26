@@ -70,6 +70,13 @@ let app = null;
 let db = null;
 let auth = null;
 
+// --- HELPER: FORCE ENGLISH NUMBERS/DATES ---
+const formatNum = (n) => (n !== undefined && n !== null ? n.toString() : "");
+const formatDate = (d) =>
+  d ? d.toLocaleDateString("en-US") : "";
+const formatTime = (d) =>
+  d ? d.toLocaleTimeString("en-US") : "";
+
 export default function App() {
   const [mode, setMode] = useState(() => {
     if (typeof window !== "undefined") {
@@ -353,8 +360,8 @@ function KioskScreen({ isReady, locationId }) {
           return [
             d.queueNumber,
             `"${d.userName}"`,
-            dt.toLocaleDateString(),
-            dt.toLocaleTimeString(),
+            formatDate(dt),
+            formatTime(dt),
             `"${d.deviceId}"`,
             d.status || "N/A",
           ].join(",");
@@ -511,7 +518,7 @@ function KioskScreen({ isReady, locationId }) {
                       {scan.userName}
                     </div>
                     <div className="text-slate-300 text-sm mt-1">
-                      {scan.timestamp?.toDate().toLocaleTimeString()}
+                      {formatTime(scan.timestamp?.toDate())}
                     </div>
                   </div>
                   <div className="flex flex-col items-end">
@@ -615,7 +622,7 @@ function AdminScreen({ isReady, onBack }) {
     LOCATIONS.forEach((loc) => {
       stats[loc] = {
         waiting: 0,
-        unique_all: new Set(), // Green Box: ALL Unique visitors (including abandoned)
+        unique_all: new Set(), // Green Box: ALL Unique visitors
         abandoned: new Set(), // Red Box: Unique visitors who abandoned
       };
     });
@@ -642,7 +649,7 @@ function AdminScreen({ isReady, onBack }) {
     LOCATIONS.forEach((loc) => {
       finalStats[loc] = {
         waiting: stats[loc].waiting,
-        // Green Box Count = Total Unique Visitors (Waiting + Completed + Abandoned)
+        // Green Box Count = Total Unique Visitors
         completed: stats[loc].unique_all.size,
         abandoned: stats[loc].abandoned.size,
       };
@@ -651,7 +658,7 @@ function AdminScreen({ isReady, onBack }) {
     setStoreStats(finalStats);
   };
 
-  // ✅ CSV EXPORT (FIXED HEADERS & DATA)
+  // ✅ CSV EXPORT (FIXED HEADERS & LOCALE)
   const handleExport = async () => {
     if (!isReady || !db) return;
     const q = query(collection(db, COLLECTION_NAME));
@@ -667,7 +674,6 @@ function AdminScreen({ isReady, onBack }) {
         (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
     );
 
-    // HEADERS: Added Date, Time (Split), Device ID, Lat, Lng
     const csvHeader = [
       "Location",
       "Queue Number",
@@ -681,22 +687,17 @@ function AdminScreen({ isReady, onBack }) {
     ].join(",");
 
     const csvRows = data.map((d) => {
-      // Safely handle dates
       const dateObj = d.timestamp ? d.timestamp.toDate() : null;
-      const dateStr = dateObj ? dateObj.toLocaleDateString() : "";
-      const timeStr = dateObj ? dateObj.toLocaleTimeString() : "";
-
-      // WRAP STRINGS IN QUOTES to prevent CSV comma splitting
       return [
         d.locationId,
         d.queueNumber,
         `"${d.userName || "Guest"}"`,
-        `"${dateStr}"`, // Separate Date
-        `"${timeStr}"`, // Separate Time
-        `"${d.deviceId || ""}"`, // Added Device ID
+        `"${formatDate(dateObj)}"`,
+        `"${formatTime(dateObj)}"`,
+        `"${d.deviceId || ""}"`,
         d.status || "waiting",
-        d.location?.lat || "", // Added Lat
-        d.location?.lng || "", // Added Lng
+        d.location?.lat || "",
+        d.location?.lng || "",
       ].join(",");
     });
 
@@ -887,7 +888,7 @@ function AdminScreen({ isReady, onBack }) {
                 <div className="grid grid-cols-3 gap-2 text-center">
                   <div className="bg-blue-50 p-2 rounded-lg">
                     <div className="text-blue-600 font-bold text-xl">
-                      {stat.waiting}
+                      {formatNum(stat.waiting)}
                     </div>
                     <div className="text-[10px] text-blue-400 font-bold uppercase">
                       Wait
@@ -895,7 +896,7 @@ function AdminScreen({ isReady, onBack }) {
                   </div>
                   <div className="bg-green-50 p-2 rounded-lg">
                     <div className="text-green-600 font-bold text-xl">
-                      {stat.completed}
+                      {formatNum(stat.completed)}
                     </div>
                     <div className="text-[10px] text-green-400 font-bold uppercase">
                       Unique Check-Ins
@@ -903,7 +904,7 @@ function AdminScreen({ isReady, onBack }) {
                   </div>
                   <div className="bg-red-50 p-2 rounded-lg">
                     <div className="text-red-600 font-bold text-xl">
-                      {stat.abandoned}
+                      {formatNum(stat.abandoned)}
                     </div>
                     <div className="text-[10px] text-red-400 font-bold uppercase">
                       Lost
@@ -936,10 +937,16 @@ function AdminScreen({ isReady, onBack }) {
                 {scans.map((s) => (
                   <tr key={s.id} className="hover:bg-slate-50">
                     <td className="px-6 py-4">{s.locationId}</td>
-                    <td className="px-6 py-4 font-bold">#{s.queueNumber}</td>
+                    <td className="px-6 py-4 font-bold">
+                      #{formatNum(s.queueNumber)}
+                    </td>
                     <td className="px-6 py-4">{s.userName}</td>
                     <td className="px-6 py-4 text-sm text-slate-500">
-                      {s.timestamp?.toDate().toLocaleString()}
+                      {s.timestamp
+                        ? `${formatDate(s.timestamp.toDate())} ${formatTime(
+                            s.timestamp.toDate()
+                          )}`
+                        : ""}
                     </td>
                     <td className="px-6 py-4">
                       <span
@@ -976,7 +983,7 @@ function AdminScreen({ isReady, onBack }) {
   );
 }
 
-// --- SCREEN 4: SCANNER (Unchanged) ---
+// --- SCREEN 4: SCANNER (FIXED TURN LOGIC & ARABIC NUMBERS) ---
 function ScannerScreen({ token, locationId, isReady, user }) {
   const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
@@ -1108,6 +1115,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     }
   }, [peopleAhead, status, isCheckedOut]);
 
+  // ✅ FIXED "IT'S YOUR TURN" LOGIC
   useEffect(() => {
     if (
       status === "success" &&
@@ -1116,10 +1124,13 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       isReady &&
       db
     ) {
+      // 1. Query for BOTH 'waiting' and 'active' users
+      // This prevents "active" users (who are still in the queue processing) from being hidden
+      // causing the next person to think they are first.
       const q = query(
         collection(db, COLLECTION_NAME),
         where("locationId", "==", locationId),
-        where("status", "==", "waiting")
+        where("status", "in", ["waiting", "active"])
       );
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const count = snapshot.docs
@@ -1351,7 +1362,8 @@ function ScannerScreen({ token, locationId, isReady, user }) {
             {locationId} Ticket
           </div>
           <div className="text-6xl font-black text-slate-800">
-            #{myQueueNumber}
+            {/* FORCE ENGLISH NUMBERS */}
+            #{formatNum(myQueueNumber)}
           </div>
           <div className="text-sm font-semibold text-blue-600 mt-2">
             {userEmail}
@@ -1367,7 +1379,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
               Users Remaining Before You
             </div>
             <div className="text-4xl font-bold">
-              {peopleAhead === 0 ? "It's your turn!" : peopleAhead}
+              {peopleAhead === 0 ? "It's your turn!" : formatNum(peopleAhead)}
             </div>
           </div>
         </div>
