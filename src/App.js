@@ -72,10 +72,8 @@ let auth = null;
 
 // --- HELPER: FORCE ENGLISH NUMBERS/DATES ---
 const formatNum = (n) => (n !== undefined && n !== null ? n.toString() : "");
-const formatDate = (d) =>
-  d ? d.toLocaleDateString("en-US") : "";
-const formatTime = (d) =>
-  d ? d.toLocaleTimeString("en-US") : "";
+const formatDate = (d) => (d ? d.toLocaleDateString("en-US") : "");
+const formatTime = (d) => (d ? d.toLocaleTimeString("en-US") : "");
 
 export default function App() {
   const [mode, setMode] = useState(() => {
@@ -670,8 +668,7 @@ function AdminScreen({ isReady, onBack }) {
       data = data.filter((d) => d.locationId === filterLoc);
 
     data.sort(
-      (a, b) =>
-        (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
+      (a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
     );
 
     const csvHeader = [
@@ -1362,8 +1359,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
             {locationId} Ticket
           </div>
           <div className="text-6xl font-black text-slate-800">
-            {/* FORCE ENGLISH NUMBERS */}
-            #{formatNum(myQueueNumber)}
+            {/* FORCE ENGLISH NUMBERS */}#{formatNum(myQueueNumber)}
           </div>
           <div className="text-sm font-semibold text-blue-600 mt-2">
             {userEmail}
