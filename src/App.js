@@ -32,16 +32,51 @@ import {
   Zap,
   LogOut,
   Maximize,
-  Clock, 
-  AlertTriangle, 
-  Smartphone, 
-  Users, 
-  CheckSquare, 
-  XCircle, 
-  Trash2, 
-  MapPin, 
-  // Removed Megaphone to prevent crash if library is old
+  Clock,
+  AlertTriangle,
+  Smartphone,
+  Users,
+  CheckSquare,
+  XCircle,
+  // Removed potentially missing icons like MapPin/Trash2/Megaphone to prevent crashes
 } from "lucide-react";
+
+// --- ERROR BOUNDARY COMPONENT (Catch Blank Screen Errors) ---
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error("Uncaught error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-6 bg-red-50 min-h-screen flex flex-col items-center justify-center text-red-900 text-center">
+          <h1 className="text-2xl font-bold mb-4">Something went wrong</h1>
+          <p className="mb-4">Please screenshot this error and send it to support:</p>
+          <pre className="bg-red-100 p-4 rounded text-left text-xs overflow-auto max-w-full">
+            {this.state.error?.toString()}
+          </pre>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-6 px-6 py-3 bg-red-600 text-white rounded-lg font-bold"
+          >
+            Reload Page
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // --- CONFIGURATION ---
 const firebaseConfig = {
@@ -62,7 +97,6 @@ const SAFETY_CLEANUP_MS = 24 * 60 * 60 * 1000;
 const GEOFENCE_RADIUS_METERS = 30;
 const LOCATIONS_COORDS = {
   QCA5: { lat: 30.004567, lng: 31.422211 },
-  // Add other locations here
 };
 
 const COLLECTION_NAME = "checkins";
@@ -85,7 +119,7 @@ const formatTime = (d) => (d ? d.toLocaleTimeString("en-US") : "");
 
 // --- HELPER: CALCULATE DISTANCE (Haversine Formula) ---
 const haversineDistance = (coords1, coords2) => {
-  if (!coords1 || !coords2) return 0; // Safety check
+  if (!coords1 || !coords2) return 0;
   const toRad = (x) => (x * Math.PI) / 180;
   const R = 6371e3; // Earth radius in meters
 
@@ -99,10 +133,18 @@ const haversineDistance = (coords1, coords2) => {
     Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
-  return R * c; // Distance in meters
+  return R * c; 
 };
 
 export default function App() {
+  return (
+    <ErrorBoundary>
+      <MainApp />
+    </ErrorBoundary>
+  );
+}
+
+function MainApp() {
   const [mode, setMode] = useState(() => {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
@@ -273,7 +315,7 @@ function LandingScreen({ onSelect }) {
   );
 }
 
-// --- SCREEN 2: KIOSK (FIXED REFRESH & EXIT) ---
+// --- SCREEN 2: KIOSK ---
 function KioskScreen({ isReady, locationId }) {
   const [token, setToken] = useState("");
   const [timeLeft, setTimeLeft] = useState(TOKEN_VALIDITY_SECONDS);
@@ -587,7 +629,7 @@ function KioskScreen({ isReady, locationId }) {
   );
 }
 
-// --- SCREEN 3: ADMIN DASHBOARD (CORRECTED) ---
+// --- SCREEN 3: ADMIN DASHBOARD ---
 function AdminScreen({ isReady, onBack }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
@@ -679,7 +721,6 @@ function AdminScreen({ isReady, onBack }) {
     setActiveTurnMap(minMap);
   };
 
-  // ✅ AGGREGATION LOGIC (UPDATED: INCLUDE ABANDONED IN UNIQUE COUNT)
   const calculateStoreStats = (filteredData) => {
     const stats = {};
 
@@ -718,7 +759,6 @@ function AdminScreen({ isReady, onBack }) {
     setStoreStats(finalStats);
   };
 
-  // ✅ CSV EXPORT (FIXED HEADERS & LOCALE)
   const handleExport = async () => {
     if (!isReady || !db) return;
     const q = query(collection(db, COLLECTION_NAME));
@@ -1023,7 +1063,6 @@ function AdminScreen({ isReady, onBack }) {
                             <XCircle size={18} />
                           </button>
                           
-                          {/* SHOW "NOW SERVING" BADGE */}
                           {activeTurnMap[s.locationId] === s.queueNumber && (
                             <div className="flex items-center px-2 py-1 bg-green-100 text-green-700 text-[10px] font-bold rounded-full animate-pulse whitespace-nowrap">
                               <CheckCircle size={12} className="mr-1" /> NOW
@@ -1043,7 +1082,7 @@ function AdminScreen({ isReady, onBack }) {
   );
 }
 
-// --- SCREEN 4: SCANNER (GEOFENCE & ZOMBIE KILLER) ---
+// --- SCREEN 4: SCANNER (SAFE GEOFENCING) ---
 function ScannerScreen({ token, locationId, isReady, user }) {
   const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
@@ -1069,7 +1108,10 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   // GEOFENCE WATCHER
   useEffect(() => {
     if (!myDocId || isCheckedOut) return;
-    if (!LOCATIONS_COORDS[locationId]) return; // Only run if location has coords
+    if (!LOCATIONS_COORDS[locationId]) return;
+
+    // Safety Check for GPS availability
+    if (!navigator.geolocation) return;
 
     const watchId = navigator.geolocation.watchPosition(
       async (position) => {
@@ -1105,18 +1147,21 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         if (myDocId && !isCheckedOut && LOCATIONS_COORDS[locationId]) {
-           navigator.geolocation.getCurrentPosition(
-            async (position) => {
-              const dist = haversineDistance(
-                { lat: position.coords.latitude, lng: position.coords.longitude },
-                LOCATIONS_COORDS[locationId]
-              );
-              if (dist > GEOFENCE_RADIUS_METERS) {
-                await updateDoc(doc(db, COLLECTION_NAME, myDocId), { status: "abandoned" });
-                setIsCheckedOut(true);
-              }
-            }
-           );
+           if (navigator.geolocation) {
+             navigator.geolocation.getCurrentPosition(
+              async (position) => {
+                const dist = haversineDistance(
+                  { lat: position.coords.latitude, lng: position.coords.longitude },
+                  LOCATIONS_COORDS[locationId]
+                );
+                if (dist > GEOFENCE_RADIUS_METERS) {
+                  await updateDoc(doc(db, COLLECTION_NAME, myDocId), { status: "abandoned" });
+                  setIsCheckedOut(true);
+                }
+              },
+              (err) => console.log("Wake check failed", err)
+             );
+           }
         }
         if (db && myDocId && !isCheckedOut) {
           updateDoc(doc(db, COLLECTION_NAME, myDocId), {
@@ -1201,7 +1246,8 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
   useEffect(() => {
     if (!isReady || !db) return;
-    // Check if location is missing (Prevents Blank Screen)
+    
+    // Safety check for locationId
     if (!locationId) {
         setStatus("error");
         setErrorMsg("Invalid QR Code (Missing Location)");
@@ -1272,10 +1318,10 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   };
 
   const confirmAndCheckIn = () => {
-    // Check if Geolocation is supported (Prevent Blank Screen)
+    // Safety check for GPS support
     if (!navigator.geolocation) {
         setStatus("error");
-        setErrorMsg("Location access is required but not supported by this browser.");
+        setErrorMsg("Your browser does not support location tracking. Please use Chrome or Safari.");
         return;
     }
 
@@ -1286,7 +1332,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       (pos) => saveCheckIn(pos.coords),
       (err) => {
           setStatus("error");
-          setErrorMsg("Location permission denied. Please allow location access.");
+          setErrorMsg("Location access denied. Please allow GPS to check in.");
       }
     );
   };
