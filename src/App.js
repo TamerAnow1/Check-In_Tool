@@ -62,7 +62,6 @@ const POPUP_COUNTDOWN_SEC = 15;
 const GEOFENCE_RADIUS_METERS = 30;
 const LOCATIONS_COORDS = {
   QCA5: { lat: 30.004567, lng: 31.422211 },
-  // Add other QCA locations here if needed
 };
 
 const COLLECTION_NAME = "checkins";
@@ -83,11 +82,10 @@ const formatNum = (n) => (n !== undefined && n !== null ? n.toString() : "");
 const formatDate = (d) => (d ? d.toLocaleDateString("en-US") : "");
 const formatTime = (d) => (d ? d.toLocaleTimeString("en-US") : "");
 
-// --- HELPER: CALCULATE DISTANCE (Haversine Formula) ---
+// --- HELPER: CALCULATE DISTANCE ---
 const haversineDistance = (coords1, coords2) => {
   const toRad = (x) => (x * Math.PI) / 180;
-  const R = 6371e3; // Earth radius in meters
-
+  const R = 6371e3;
   const dLat = toRad(coords2.lat - coords1.lat);
   const dLon = toRad(coords2.lng - coords1.lng);
   const lat1 = toRad(coords1.lat);
@@ -97,8 +95,7 @@ const haversineDistance = (coords1, coords2) => {
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-  return R * c; // Distance in meters
+  return R * c;
 };
 
 export default function App() {
@@ -126,7 +123,6 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [isFirebaseReady, setIsFirebaseReady] = useState(false);
 
-  // --- HIDE SANDBOX UI ---
   useEffect(() => {
     const styleId = "sandbox-hider-styles";
     if (!document.getElementById(styleId)) {
@@ -142,7 +138,6 @@ export default function App() {
     }
   }, []);
 
-  // ✅ INITIALIZE FIREBASE
   useEffect(() => {
     if (!app) {
       try {
@@ -201,7 +196,7 @@ export default function App() {
   );
 }
 
-// --- SCREEN 1: LANDING ---
+// --- LANDING, KIOSK, ADMIN SCREENS (No changes, hidden for brevity) ---
 function LandingScreen({ onSelect }) {
   const [selectedLoc, setSelectedLoc] = useState("QCA1");
   return (
@@ -272,7 +267,6 @@ function LandingScreen({ onSelect }) {
   );
 }
 
-// --- SCREEN 2: KIOSK ---
 function KioskScreen({ isReady, locationId }) {
   const [token, setToken] = useState("");
   const [timeLeft, setTimeLeft] = useState(TOKEN_VALIDITY_SECONDS);
@@ -559,7 +553,6 @@ function KioskScreen({ isReady, locationId }) {
   );
 }
 
-// --- SCREEN 3: ADMIN DASHBOARD ---
 function AdminScreen({ isReady, onBack }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
@@ -987,7 +980,7 @@ function AdminScreen({ isReady, onBack }) {
   );
 }
 
-// --- SCREEN 4: SCANNER (SAFE STORAGE + LOGGING) ---
+// --- SCREEN 4: SCANNER (ZOMBIE KILLER MODIFIED) ---
 function ScannerScreen({ token, locationId, isReady, user }) {
   const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
@@ -1179,7 +1172,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   const generateNativeFingerprint = async () =>
     "fp_" + Math.random().toString(36).substr(2, 9);
 
-  // ✅ SAFELY INIT STORAGE (PREVENTS INIT ERRORS)
   useEffect(() => {
     if (!isReady || !db) return;
     const init = async () => {
@@ -1187,13 +1179,11 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       const STORAGE_KEY = "secure_user_badge";
 
       try {
-        // SAFE STORAGE ACCESS
         let storedBadge = null;
         try {
           storedBadge = localStorage.getItem(STORAGE_KEY);
         } catch (storageError) {
           console.warn("Storage restricted", storageError);
-          // Proceed without storage (user is treated as new)
         }
 
         const fp = await generateNativeFingerprint();
@@ -1212,7 +1202,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         setStatus("idle");
       } catch (e) {
         setStatus("error");
-        // LOG ACTUAL ERROR FOR DEBUGGING
         const msg = e.message || "Unknown init error";
         setErrorMsg("Init failed: " + msg);
       }
@@ -1231,7 +1220,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         fingerprint: fingerprint,
       });
 
-      // SAFE SET ITEM
       try {
         localStorage.setItem("secure_user_badge", badgeId);
       } catch (err) {
@@ -1262,32 +1250,49 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   const saveCheckIn = async (coords) => {
     setStatus("saving");
     try {
-      const duplicateQ = query(
+      // 1. ZOMBIE CHECK: Look for ANY existing waiting ticket for this device/email
+      // If found, assume they abandoned it (since they are rescanning now)
+      const zombieQ = query(
         collection(db, COLLECTION_NAME),
         where("deviceId", "==", deviceId),
-        where("tokenUsed", "==", token)
+        where("status", "in", ["waiting", "active"])
       );
-      const duplicateSnap = await getDocs(duplicateQ);
-      if (!duplicateSnap.empty) {
-        const existingDoc = duplicateSnap.docs[0];
-        const d = existingDoc.data();
+      const zombieSnap = await getDocs(zombieQ);
+
+      // If we find zombies that ARE NOT the current token, kill them.
+      // If it IS the current token, we resume.
+      let resumeDoc = null;
+
+      if (!zombieSnap.empty) {
+        for (const docSnap of zombieSnap.docs) {
+          const d = docSnap.data();
+          if (d.tokenUsed === token) {
+            // This is a VALID resume (same token)
+            resumeDoc = docSnap;
+          } else {
+            // This is a ZOMBIE (old token, but still waiting). Kill it.
+            await updateDoc(doc(db, COLLECTION_NAME, docSnap.id), {
+              status: "abandoned",
+            });
+          }
+        }
+      }
+
+      if (resumeDoc) {
+        const d = resumeDoc.data();
         setMyQueueNumber(d.queueNumber);
-        setMyDocId(existingDoc.id);
-        if (d.status === "completed" || d.status === "abandoned")
-          setIsCheckedOut(true);
+        setMyDocId(resumeDoc.id);
         setStatus("success");
-        await updateDoc(doc(db, COLLECTION_NAME, existingDoc.id), {
+        await updateDoc(doc(db, COLLECTION_NAME, resumeDoc.id), {
           lastActive: serverTimestamp(),
         });
         return;
       }
-    } catch (e) {
-      console.warn(e);
-    }
 
-    const todayStr = new Date().toISOString().split("T")[0];
-    const newRef = doc(collection(db, COLLECTION_NAME));
-    try {
+      // 2. CREATE NEW TICKET
+      const todayStr = new Date().toISOString().split("T")[0];
+      const newRef = doc(collection(db, COLLECTION_NAME));
+
       const qNum = await runTransaction(db, async (t) => {
         const cRef = doc(db, COUNTER_COLLECTION, locationId);
         const cSnap = await t.get(cRef);
@@ -1318,7 +1323,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     }
   };
 
-  // --- UI STATES ---
+  // --- UI STATES (Unchanged) ---
   if (status === "success") {
     if (statusFromDB === "abandoned")
       return (
@@ -1396,7 +1401,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
             {locationId} Ticket
           </div>
           <div className="text-6xl font-black text-slate-800">
-            {/* FORCE ENGLISH NUMBERS */}#{formatNum(myQueueNumber)}
+            #{formatNum(myQueueNumber)}
           </div>
           <div className="text-sm font-semibold text-blue-600 mt-2">
             {userEmail}
