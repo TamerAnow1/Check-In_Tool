@@ -40,7 +40,7 @@ import {
   XCircle, 
   Trash2, 
   MapPin, 
-  Megaphone, // Added for "Now Serving" icon
+  // Removed Megaphone to prevent crash if library is old
 } from "lucide-react";
 
 // --- CONFIGURATION ---
@@ -56,7 +56,6 @@ const firebaseConfig = {
 
 // --- SETTINGS ---
 const TEST_MODE = false;
-// NOTE: Timeout removed for user. Kiosk uses this only for 24h cleanup.
 const SAFETY_CLEANUP_MS = 24 * 60 * 60 * 1000; 
 
 // --- GEO-FENCING CONFIG ---
@@ -86,6 +85,7 @@ const formatTime = (d) => (d ? d.toLocaleTimeString("en-US") : "");
 
 // --- HELPER: CALCULATE DISTANCE (Haversine Formula) ---
 const haversineDistance = (coords1, coords2) => {
+  if (!coords1 || !coords2) return 0; // Safety check
   const toRad = (x) => (x * Math.PI) / 180;
   const R = 6371e3; // Earth radius in meters
 
@@ -475,8 +475,6 @@ function KioskScreen({ isReady, locationId }) {
   return (
     <div className="flex flex-col md:flex-row h-screen bg-slate-900 text-white overflow-hidden">
       <div className="flex-1 flex flex-col items-center justify-center p-8 border-r border-slate-700 relative">
-        
-        {/* MANUAL EXIT BUTTON (Top Left) */}
         <button
           onClick={handleManualExit}
           className="absolute top-6 left-6 bg-slate-800 hover:bg-red-900 px-4 py-2 rounded-lg font-bold flex items-center shadow-lg border border-slate-600 transition-colors z-50"
@@ -589,14 +587,14 @@ function KioskScreen({ isReady, locationId }) {
   );
 }
 
-// --- SCREEN 3: ADMIN DASHBOARD (ADDED "NOW SERVING" BADGE) ---
+// --- SCREEN 3: ADMIN DASHBOARD (CORRECTED) ---
 function AdminScreen({ isReady, onBack }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
   const [authError, setAuthError] = useState("");
   const [scans, setScans] = useState([]);
   const [storeStats, setStoreStats] = useState({});
-  const [activeTurnMap, setActiveTurnMap] = useState({}); // Stores "Who is first" per location
+  const [activeTurnMap, setActiveTurnMap] = useState({});
 
   const [filterLoc, setFilterLoc] = useState("ALL");
   const [filterDate, setFilterDate] = useState(
@@ -669,13 +667,10 @@ function AdminScreen({ isReady, onBack }) {
     return data;
   };
 
-  // ✅ CALCULATE WHO HAS THE "TURN" (Lowest number waiting per location)
   const calculateTurns = (allData) => {
     const minMap = {};
     allData.forEach((d) => {
-      // Only check waiting/active people
       if (d.status === "waiting" || d.status === "active") {
-        // If we haven't seen this location OR this number is lower than current min
         if (!minMap[d.locationId] || d.queueNumber < minMap[d.locationId]) {
           minMap[d.locationId] = d.queueNumber;
         }
@@ -684,7 +679,7 @@ function AdminScreen({ isReady, onBack }) {
     setActiveTurnMap(minMap);
   };
 
-  // ✅ AGGREGATION LOGIC (INCLUDE ABANDONED IN UNIQUE COUNT)
+  // ✅ AGGREGATION LOGIC (UPDATED: INCLUDE ABANDONED IN UNIQUE COUNT)
   const calculateStoreStats = (filteredData) => {
     const stats = {};
 
@@ -784,9 +779,7 @@ function AdminScreen({ isReady, onBack }) {
         ...doc.data(),
       }));
       
-      // Calculate "Now Serving" based on FULL DATA (before filter)
       calculateTurns(rawData);
-
       const dateFilteredData = applyFilters(rawData);
       calculateStoreStats(dateFilteredData);
       
@@ -1019,7 +1012,7 @@ function AdminScreen({ isReady, onBack }) {
                         {s.status || "waiting"}
                       </span>
                     </td>
-                    <td className="px-6 py-4 flex gap-2">
+                    <td className="px-6 py-4 flex gap-2 items-center">
                       {(s.status === "waiting" || s.status === "active") && (
                         <>
                           <button
@@ -1030,10 +1023,10 @@ function AdminScreen({ isReady, onBack }) {
                             <XCircle size={18} />
                           </button>
                           
-                          {/* SHOW "NOW SERVING" BADGE IF IT'S THEIR TURN */}
+                          {/* SHOW "NOW SERVING" BADGE */}
                           {activeTurnMap[s.locationId] === s.queueNumber && (
-                            <div className="flex items-center px-3 py-1 bg-green-100 text-green-700 text-xs font-bold rounded-full animate-pulse">
-                              <Megaphone size={14} className="mr-1" /> NOW
+                            <div className="flex items-center px-2 py-1 bg-green-100 text-green-700 text-[10px] font-bold rounded-full animate-pulse whitespace-nowrap">
+                              <CheckCircle size={12} className="mr-1" /> NOW
                             </div>
                           )}
                         </>
@@ -1076,8 +1069,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   // GEOFENCE WATCHER
   useEffect(() => {
     if (!myDocId || isCheckedOut) return;
-    const targetCoords = LOCATIONS_COORDS[locationId];
-    if (!targetCoords) return;
+    if (!LOCATIONS_COORDS[locationId]) return; // Only run if location has coords
 
     const watchId = navigator.geolocation.watchPosition(
       async (position) => {
@@ -1085,7 +1077,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         const userLng = position.coords.longitude;
         const dist = haversineDistance(
           { lat: userLat, lng: userLng },
-          targetCoords
+          LOCATIONS_COORDS[locationId]
         );
 
         if (dist > GEOFENCE_RADIUS_METERS) {
@@ -1112,7 +1104,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        // Force immediate Geofence check
         if (myDocId && !isCheckedOut && LOCATIONS_COORDS[locationId]) {
            navigator.geolocation.getCurrentPosition(
             async (position) => {
@@ -1127,7 +1118,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
             }
            );
         }
-        // Heartbeat
         if (db && myDocId && !isCheckedOut) {
           updateDoc(doc(db, COLLECTION_NAME, myDocId), {
             lastActive: serverTimestamp(),
@@ -1211,6 +1201,13 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
   useEffect(() => {
     if (!isReady || !db) return;
+    // Check if location is missing (Prevents Blank Screen)
+    if (!locationId) {
+        setStatus("error");
+        setErrorMsg("Invalid QR Code (Missing Location)");
+        return;
+    }
+
     const init = async () => {
       setStatus("initializing");
       const STORAGE_KEY = "secure_user_badge";
@@ -1275,12 +1272,22 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   };
 
   const confirmAndCheckIn = () => {
+    // Check if Geolocation is supported (Prevent Blank Screen)
+    if (!navigator.geolocation) {
+        setStatus("error");
+        setErrorMsg("Location access is required but not supported by this browser.");
+        return;
+    }
+
     setShowPermissionModal(false);
     setStatus("locating");
-    if (!navigator.geolocation) return setStatus("error");
+    
     navigator.geolocation.getCurrentPosition(
       (pos) => saveCheckIn(pos.coords),
-      () => setStatus("error")
+      (err) => {
+          setStatus("error");
+          setErrorMsg("Location permission denied. Please allow location access.");
+      }
     );
   };
 
