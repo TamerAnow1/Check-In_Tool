@@ -39,7 +39,7 @@ import {
   CheckSquare,
   XCircle,
   Trash2,
-  MapPin, // Added for geo-location UI
+  MapPin,
 } from "lucide-react";
 
 // --- CONFIGURATION ---
@@ -61,8 +61,8 @@ const POPUP_COUNTDOWN_SEC = 15;
 // --- GEO-FENCING CONFIG ---
 const GEOFENCE_RADIUS_METERS = 30;
 const LOCATIONS_COORDS = {
-  // Add other locations here in the future
   QCA5: { lat: 30.004567, lng: 31.422211 },
+  // Add other QCA locations here if needed
 };
 
 const COLLECTION_NAME = "checkins";
@@ -687,8 +687,7 @@ function AdminScreen({ isReady, onBack }) {
       data = data.filter((d) => d.locationId === filterLoc);
 
     data.sort(
-      (a, b) =>
-        (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
+      (a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
     );
 
     const csvHeader = [
@@ -988,7 +987,7 @@ function AdminScreen({ isReady, onBack }) {
   );
 }
 
-// --- SCREEN 4: SCANNER (GEOFENCING MODIFIED) ---
+// --- SCREEN 4: SCANNER (SAFE STORAGE + LOGGING) ---
 function ScannerScreen({ token, locationId, isReady, user }) {
   const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
@@ -1014,8 +1013,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   // GEOFENCE WATCHER
   useEffect(() => {
     if (!myDocId || isCheckedOut) return;
-
-    // Only watch if this location has coordinates configured
     const targetCoords = LOCATIONS_COORDS[locationId];
     if (!targetCoords) return;
 
@@ -1029,7 +1026,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         );
 
         if (dist > GEOFENCE_RADIUS_METERS) {
-          // USER LEFT THE AREA
           if (db && myDocId) {
             try {
               await updateDoc(doc(db, COLLECTION_NAME, myDocId), {
@@ -1183,15 +1179,26 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   const generateNativeFingerprint = async () =>
     "fp_" + Math.random().toString(36).substr(2, 9);
 
+  // ✅ SAFELY INIT STORAGE (PREVENTS INIT ERRORS)
   useEffect(() => {
     if (!isReady || !db) return;
     const init = async () => {
       setStatus("initializing");
       const STORAGE_KEY = "secure_user_badge";
+
       try {
-        let storedBadge = localStorage.getItem(STORAGE_KEY);
+        // SAFE STORAGE ACCESS
+        let storedBadge = null;
+        try {
+          storedBadge = localStorage.getItem(STORAGE_KEY);
+        } catch (storageError) {
+          console.warn("Storage restricted", storageError);
+          // Proceed without storage (user is treated as new)
+        }
+
         const fp = await generateNativeFingerprint();
         setFingerprint(fp);
+
         if (storedBadge) {
           setDeviceId(storedBadge);
           const snap = await getDoc(doc(db, DEVICES_COLLECTION, storedBadge));
@@ -1199,11 +1206,15 @@ function ScannerScreen({ token, locationId, isReady, user }) {
             setUserEmail(snap.data().email);
             setShowPermissionModal(true);
           } else setShowEmailModal(true);
-        } else setShowEmailModal(true);
+        } else {
+          setShowEmailModal(true);
+        }
         setStatus("idle");
       } catch (e) {
         setStatus("error");
-        setErrorMsg("Init failed");
+        // LOG ACTUAL ERROR FOR DEBUGGING
+        const msg = e.message || "Unknown init error";
+        setErrorMsg("Init failed: " + msg);
       }
     };
     init();
@@ -1219,13 +1230,20 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         email: emailInput,
         fingerprint: fingerprint,
       });
-      localStorage.setItem("secure_user_badge", badgeId);
+
+      // SAFE SET ITEM
+      try {
+        localStorage.setItem("secure_user_badge", badgeId);
+      } catch (err) {
+        console.warn("Could not save to storage", err);
+      }
+
       setDeviceId(badgeId);
       setUserEmail(emailInput);
       setShowEmailModal(false);
       setShowPermissionModal(true);
     } catch (e) {
-      alert("Error");
+      alert("Error: " + e.message);
     } finally {
       setIsRecovering(false);
     }
@@ -1296,7 +1314,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       setStatus("success");
     } catch (e) {
       setStatus("error");
-      setErrorMsg("Failed to check in");
+      setErrorMsg("Check-in failed: " + e.message);
     }
   };
 
@@ -1378,7 +1396,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
             {locationId} Ticket
           </div>
           <div className="text-6xl font-black text-slate-800">
-            #{formatNum(myQueueNumber)}
+            {/* FORCE ENGLISH NUMBERS */}#{formatNum(myQueueNumber)}
           </div>
           <div className="text-sm font-semibold text-blue-600 mt-2">
             {userEmail}
@@ -1398,7 +1416,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
             </div>
           </div>
         </div>
-        {/* CHECKOUT BUTTON REMOVED */}
       </div>
     );
   }
