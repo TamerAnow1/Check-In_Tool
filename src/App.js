@@ -38,10 +38,9 @@ import {
   Users,
   CheckSquare,
   XCircle,
-  // Removed potentially missing icons like MapPin/Trash2/Megaphone to prevent crashes
 } from "lucide-react";
 
-// --- ERROR BOUNDARY COMPONENT (Catch Blank Screen Errors) ---
+// --- ERROR BOUNDARY (Prevents White Screen Crashes) ---
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -61,7 +60,6 @@ class ErrorBoundary extends React.Component {
       return (
         <div className="p-6 bg-red-50 min-h-screen flex flex-col items-center justify-center text-red-900 text-center">
           <h1 className="text-2xl font-bold mb-4">Something went wrong</h1>
-          <p className="mb-4">Please screenshot this error and send it to support:</p>
           <pre className="bg-red-100 p-4 rounded text-left text-xs overflow-auto max-w-full">
             {this.state.error?.toString()}
           </pre>
@@ -91,7 +89,8 @@ const firebaseConfig = {
 
 // --- SETTINGS ---
 const TEST_MODE = false;
-const SAFETY_CLEANUP_MS = 24 * 60 * 60 * 1000; 
+const SAFETY_CLEANUP_MS = 24 * 60 * 60 * 1000;
+const POPUP_COUNTDOWN_SEC = 15; // <--- RESTORED VARIABLE
 
 // --- GEO-FENCING CONFIG ---
 const GEOFENCE_RADIUS_METERS = 30;
@@ -133,7 +132,7 @@ const haversineDistance = (coords1, coords2) => {
     Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
-  return R * c; 
+  return R * c;
 };
 
 export default function App() {
@@ -325,7 +324,6 @@ function KioskScreen({ isReady, locationId }) {
   const [isDownloading, setIsDownloading] = useState(false);
   const [wakeLockActive, setWakeLockActive] = useState(false);
 
-  // Track the last signal we handled (null = not handled yet)
   const lastSignalRef = useRef(null);
   const scansRef = useRef(recentScans);
 
@@ -333,7 +331,7 @@ function KioskScreen({ isReady, locationId }) {
     scansRef.current = recentScans;
   }, [recentScans]);
 
-  // --- 1. SAFETY WATCHDOG (CLEANUP ONLY - 24 HOURS) ---
+  // SAFETY CLEANUP (24H)
   useEffect(() => {
     if (!isReady || !db) return;
     const cleanupInterval = setInterval(async () => {
@@ -343,7 +341,6 @@ function KioskScreen({ isReady, locationId }) {
         if (user.status === "waiting") {
           const lastActive =
             user.lastActive?.toMillis() || user.timestamp?.toMillis() || 0;
-          // Only kick if stuck for 24 HOURS (Safety net for ghosts)
           if (now - lastActive > SAFETY_CLEANUP_MS) {
             console.log(`Watchdog: Cleaning up ghost ${user.userName}`);
             try {
@@ -356,7 +353,7 @@ function KioskScreen({ isReady, locationId }) {
           }
         }
       });
-    }, 60000); // Check every minute
+    }, 60000);
     return () => clearInterval(cleanupInterval);
   }, [isReady]);
 
@@ -368,7 +365,6 @@ function KioskScreen({ isReady, locationId }) {
     }
   };
 
-  // --- 2. WAKE LOCK (KEEP SCREEN ON) ---
   useEffect(() => {
     let wakeLock = null;
     const requestWakeLock = async () => {
@@ -393,7 +389,6 @@ function KioskScreen({ isReady, locationId }) {
     };
   }, []);
 
-  // --- 3. ROBUST REFRESH LISTENER (No Clock Dependency) ---
   useEffect(() => {
     if (!isReady || !db) return;
     const unsub = onSnapshot(
@@ -409,7 +404,6 @@ function KioskScreen({ isReady, locationId }) {
           }
 
           if (serverTime !== lastSignalRef.current) {
-            console.log("New Refresh Signal Detected! Resetting...");
             lastSignalRef.current = serverTime;
             window.location.href = window.location.origin + window.location.pathname;
           }
@@ -1063,6 +1057,7 @@ function AdminScreen({ isReady, onBack }) {
                             <XCircle size={18} />
                           </button>
                           
+                          {/* SHOW "NOW SERVING" BADGE */}
                           {activeTurnMap[s.locationId] === s.queueNumber && (
                             <div className="flex items-center px-2 py-1 bg-green-100 text-green-700 text-[10px] font-bold rounded-full animate-pulse whitespace-nowrap">
                               <CheckCircle size={12} className="mr-1" /> NOW
@@ -1412,7 +1407,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       return (
         <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-red-50 text-center animate-in zoom-in">
           <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-6 text-red-600">
-            <MapPin size={32} />
+            <XCircle size={32} />
           </div>
           <h2 className="text-xl font-bold text-red-800 mb-2">You Left the Area</h2>
           <p className="text-slate-600 mb-6">
