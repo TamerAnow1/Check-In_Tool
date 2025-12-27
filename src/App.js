@@ -33,11 +33,11 @@ import {
   LogOut,
   Maximize,
   Clock,
-  AlertTriangle,
   Smartphone,
   Users,
   CheckSquare,
   XCircle,
+  // Removed AlertTriangle as popup is gone
 } from "lucide-react";
 
 // --- ERROR BOUNDARY (Prevents White Screen Crashes) ---
@@ -89,13 +89,14 @@ const firebaseConfig = {
 
 // --- SETTINGS ---
 const TEST_MODE = false;
-const SAFETY_CLEANUP_MS = 24 * 60 * 60 * 1000;
-const POPUP_COUNTDOWN_SEC = 15; // <--- RESTORED VARIABLE
+const SAFETY_CLEANUP_MS = 24 * 60 * 60 * 1000; // 24 Hours (Kiosk cleanup only)
 
 // --- GEO-FENCING CONFIG ---
-const GEOFENCE_RADIUS_METERS = 30;
+// Increased to 100m to prevent "GPS Drift" from kicking users inside the store
+const GEOFENCE_RADIUS_METERS = 100;
 const LOCATIONS_COORDS = {
   QCA5: { lat: 30.004567, lng: 31.422211 },
+  // Add other locations here
 };
 
 const COLLECTION_NAME = "checkins";
@@ -324,6 +325,7 @@ function KioskScreen({ isReady, locationId }) {
   const [isDownloading, setIsDownloading] = useState(false);
   const [wakeLockActive, setWakeLockActive] = useState(false);
 
+  // Track the last signal we handled (null = not handled yet)
   const lastSignalRef = useRef(null);
   const scansRef = useRef(recentScans);
 
@@ -331,7 +333,7 @@ function KioskScreen({ isReady, locationId }) {
     scansRef.current = recentScans;
   }, [recentScans]);
 
-  // SAFETY CLEANUP (24H)
+  // --- 1. SAFETY WATCHDOG (CLEANUP ONLY - 24 HOURS) ---
   useEffect(() => {
     if (!isReady || !db) return;
     const cleanupInterval = setInterval(async () => {
@@ -341,6 +343,7 @@ function KioskScreen({ isReady, locationId }) {
         if (user.status === "waiting") {
           const lastActive =
             user.lastActive?.toMillis() || user.timestamp?.toMillis() || 0;
+          // Only kick if stuck for 24 HOURS (Safety net for ghosts)
           if (now - lastActive > SAFETY_CLEANUP_MS) {
             console.log(`Watchdog: Cleaning up ghost ${user.userName}`);
             try {
@@ -353,7 +356,7 @@ function KioskScreen({ isReady, locationId }) {
           }
         }
       });
-    }, 60000);
+    }, 60000); // Check every minute
     return () => clearInterval(cleanupInterval);
   }, [isReady]);
 
@@ -365,6 +368,7 @@ function KioskScreen({ isReady, locationId }) {
     }
   };
 
+  // --- 2. WAKE LOCK (KEEP SCREEN ON) ---
   useEffect(() => {
     let wakeLock = null;
     const requestWakeLock = async () => {
@@ -389,6 +393,7 @@ function KioskScreen({ isReady, locationId }) {
     };
   }, []);
 
+  // --- 3. ROBUST REFRESH LISTENER (No Clock Dependency) ---
   useEffect(() => {
     if (!isReady || !db) return;
     const unsub = onSnapshot(
@@ -404,8 +409,10 @@ function KioskScreen({ isReady, locationId }) {
           }
 
           if (serverTime !== lastSignalRef.current) {
+            console.log("New Refresh Signal Detected! Resetting...");
             lastSignalRef.current = serverTime;
-            window.location.href = window.location.origin + window.location.pathname;
+            window.location.href =
+              window.location.origin + window.location.pathname;
           }
         }
       }
@@ -764,8 +771,7 @@ function AdminScreen({ isReady, onBack }) {
       data = data.filter((d) => d.locationId === filterLoc);
 
     data.sort(
-      (a, b) =>
-        (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
+      (a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
     );
 
     const csvHeader = [
@@ -812,11 +818,11 @@ function AdminScreen({ isReady, onBack }) {
         id: doc.id,
         ...doc.data(),
       }));
-      
+
       calculateTurns(rawData);
       const dateFilteredData = applyFilters(rawData);
       calculateStoreStats(dateFilteredData);
-      
+
       let tableData = dateFilteredData;
       if (filterLoc !== "ALL") {
         tableData = tableData.filter((d) => d.locationId === filterLoc);
@@ -1056,8 +1062,7 @@ function AdminScreen({ isReady, onBack }) {
                           >
                             <XCircle size={18} />
                           </button>
-                          
-                          {/* SHOW "NOW SERVING" BADGE */}
+
                           {activeTurnMap[s.locationId] === s.queueNumber && (
                             <div className="flex items-center px-2 py-1 bg-green-100 text-green-700 text-[10px] font-bold rounded-full animate-pulse whitespace-nowrap">
                               <CheckCircle size={12} className="mr-1" /> NOW
@@ -1077,7 +1082,7 @@ function AdminScreen({ isReady, onBack }) {
   );
 }
 
-// --- SCREEN 4: SCANNER (SAFE GEOFENCING) ---
+// --- SCREEN 4: SCANNER (GEOFENCE & NO POPUP) ---
 function ScannerScreen({ token, locationId, isReady, user }) {
   const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
@@ -1094,10 +1099,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   const [isRecovering, setIsRecovering] = useState(false);
   const [emailInput, setEmailInput] = useState("");
 
-  const [lastInteraction, setLastInteraction] = useState(Date.now());
-  const [showInactivityModal, setShowInactivityModal] = useState(false);
-  const [countdown, setCountdown] = useState(POPUP_COUNTDOWN_SEC);
-
   const [statusFromDB, setStatusFromDB] = useState("waiting");
 
   // GEOFENCE WATCHER
@@ -1105,13 +1106,17 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     if (!myDocId || isCheckedOut) return;
     if (!LOCATIONS_COORDS[locationId]) return;
 
-    // Safety Check for GPS availability
     if (!navigator.geolocation) return;
 
     const watchId = navigator.geolocation.watchPosition(
       async (position) => {
         const userLat = position.coords.latitude;
         const userLng = position.coords.longitude;
+        const accuracy = position.coords.accuracy;
+
+        // IGNORE POOR ACCURACY
+        if (accuracy > 100) return;
+
         const dist = haversineDistance(
           { lat: userLat, lng: userLng },
           LOCATIONS_COORDS[locationId]
@@ -1142,21 +1147,26 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         if (myDocId && !isCheckedOut && LOCATIONS_COORDS[locationId]) {
-           if (navigator.geolocation) {
-             navigator.geolocation.getCurrentPosition(
+          if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
               async (position) => {
                 const dist = haversineDistance(
-                  { lat: position.coords.latitude, lng: position.coords.longitude },
+                  {
+                    lat: position.coords.latitude,
+                    lng: position.coords.longitude,
+                  },
                   LOCATIONS_COORDS[locationId]
                 );
                 if (dist > GEOFENCE_RADIUS_METERS) {
-                  await updateDoc(doc(db, COLLECTION_NAME, myDocId), { status: "abandoned" });
+                  await updateDoc(doc(db, COLLECTION_NAME, myDocId), {
+                    status: "abandoned",
+                  });
                   setIsCheckedOut(true);
                 }
               },
               (err) => console.log("Wake check failed", err)
-             );
-           }
+            );
+          }
         }
         if (db && myDocId && !isCheckedOut) {
           updateDoc(doc(db, COLLECTION_NAME, myDocId), {
@@ -1166,16 +1176,12 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       }
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [myDocId, isCheckedOut, locationId]);
 
   useEffect(() => {
-    if (
-      status === "success" &&
-      myDocId &&
-      !isCheckedOut &&
-      !showInactivityModal
-    ) {
+    if (status === "success" && myDocId && !isCheckedOut) {
       const beat = setInterval(async () => {
         try {
           await updateDoc(doc(db, COLLECTION_NAME, myDocId), {
@@ -1187,7 +1193,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       }, 60000);
       return () => clearInterval(beat);
     }
-  }, [status, myDocId, isCheckedOut, showInactivityModal]);
+  }, [status, myDocId, isCheckedOut]);
 
   useEffect(() => {
     if (myDocId) {
@@ -1241,12 +1247,12 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
   useEffect(() => {
     if (!isReady || !db) return;
-    
+
     // Safety check for locationId
     if (!locationId) {
-        setStatus("error");
-        setErrorMsg("Invalid QR Code (Missing Location)");
-        return;
+      setStatus("error");
+      setErrorMsg("Invalid QR Code (Missing Location)");
+      return;
     }
 
     const init = async () => {
@@ -1313,21 +1319,22 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   };
 
   const confirmAndCheckIn = () => {
-    // Safety check for GPS support
     if (!navigator.geolocation) {
-        setStatus("error");
-        setErrorMsg("Your browser does not support location tracking. Please use Chrome or Safari.");
-        return;
+      setStatus("error");
+      setErrorMsg(
+        "Your browser does not support location tracking. Please use Chrome or Safari."
+      );
+      return;
     }
 
     setShowPermissionModal(false);
     setStatus("locating");
-    
+
     navigator.geolocation.getCurrentPosition(
       (pos) => saveCheckIn(pos.coords),
       (err) => {
-          setStatus("error");
-          setErrorMsg("Location access denied. Please allow GPS to check in.");
+        setStatus("error");
+        setErrorMsg("Location access denied. Please allow GPS to check in.");
       }
     );
   };
@@ -1341,7 +1348,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         where("status", "in", ["waiting", "active"])
       );
       const zombieSnap = await getDocs(zombieQ);
-      
+
       let resumeDoc = null;
 
       if (!zombieSnap.empty) {
@@ -1351,7 +1358,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
             resumeDoc = docSnap;
           } else {
             await updateDoc(doc(db, COLLECTION_NAME, docSnap.id), {
-              status: "abandoned"
+              status: "abandoned",
             });
           }
         }
@@ -1370,7 +1377,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
       const todayStr = new Date().toISOString().split("T")[0];
       const newRef = doc(collection(db, COLLECTION_NAME));
-      
+
       const qNum = await runTransaction(db, async (t) => {
         const cRef = doc(db, COUNTER_COLLECTION, locationId);
         const cSnap = await t.get(cRef);
@@ -1409,7 +1416,9 @@ function ScannerScreen({ token, locationId, isReady, user }) {
           <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-6 text-red-600">
             <XCircle size={32} />
           </div>
-          <h2 className="text-xl font-bold text-red-800 mb-2">You Left the Area</h2>
+          <h2 className="text-xl font-bold text-red-800 mb-2">
+            You Left the Area
+          </h2>
           <p className="text-slate-600 mb-6">
             You must stay near the store to keep your spot.
           </p>
