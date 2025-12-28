@@ -89,7 +89,6 @@ const SAFETY_CLEANUP_MS = 24 * 60 * 60 * 1000;
 const POPUP_COUNTDOWN_SEC = 15;
 
 // --- GEO-FENCING CONFIG ---
-// Radius: 100m (Safe Zone)
 const GEOFENCE_RADIUS_METERS = 100;
 const LOCATIONS_COORDS = {
   QCA5: { lat: 30.004567, lng: 31.422211 },
@@ -111,8 +110,6 @@ let auth = null;
 const formatNum = (n) => (n !== undefined && n !== null ? n.toString() : "");
 const formatDate = (d) => (d ? d.toLocaleDateString("en-US") : "");
 const formatTime = (d) => (d ? d.toLocaleTimeString("en-US") : "");
-
-// ✅ SAFE DATE GENERATOR (YYYY-MM-DD) - Ensures Daily Reset Works
 const getTodayStr = () => {
   const d = new Date();
   const year = d.getFullYear();
@@ -476,14 +473,14 @@ function KioskScreen({ isReady, locationId }) {
       where("locationId", "==", locationId)
     );
     const unsubscribe = onSnapshot(safeQ, (snapshot) => {
-      const todayStr = getTodayStr(); // Strict Date
+      const todayStr = getTodayStr();
       const allScans = snapshot.docs
         .map((doc) => ({ id: doc.id, ...doc.data() }))
         .filter(
           (u) =>
             (u.status === "waiting" || u.status === "active") &&
             u.date === todayStr
-        ); // ✅ Strict Date Filter
+        );
 
       allScans.sort(
         (a, b) =>
@@ -622,7 +619,7 @@ function AdminScreen({ isReady, onBack }) {
   const [storeStats, setStoreStats] = useState({});
   const [activeTurnMap, setActiveTurnMap] = useState({});
   const [filterLoc, setFilterLoc] = useState("ALL");
-  const [filterDate, setFilterDate] = useState(getTodayStr()); // Default to Strict Today
+  const [filterDate, setFilterDate] = useState(getTodayStr());
   const [dateMode, setDateMode] = useState("DAY");
   const [isRefreshingKiosks, setIsRefreshingKiosks] = useState(false);
 
@@ -768,11 +765,9 @@ function AdminScreen({ isReady, onBack }) {
     const q = query(collection(db, COLLECTION_NAME));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       let rawData = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-
       const dateFilteredData = applyFilters(rawData);
-      calculateTurns(dateFilteredData); // ✅ Now correctly ignores old ghosts
+      calculateTurns(dateFilteredData);
       calculateStoreStats(dateFilteredData);
-
       let tableData = dateFilteredData;
       if (filterLoc !== "ALL")
         tableData = tableData.filter((d) => d.locationId === filterLoc);
@@ -1034,7 +1029,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   const [userEmail, setUserEmail] = useState("");
   const [myQueueNumber, setMyQueueNumber] = useState(null);
   const [myDocId, setMyDocId] = useState(null);
-  const [peopleAhead, setPeopleAhead] = useState(0);
+  const [peopleAhead, setPeopleAhead] = useState(null); // Changed to null for safety
   const [isCheckedOut, setIsCheckedOut] = useState(false);
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [showPermissionModal, setShowPermissionModal] = useState(false);
@@ -1060,6 +1055,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
         setDebugAcc(Math.round(accuracy));
 
+        // Ignore poor accuracy
         if (accuracy > 100) return;
 
         const dist = haversineDistance(
@@ -1179,12 +1175,11 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       );
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const todayStr = getTodayStr();
-
         // 1. Get all active users for today
         const activeUsers = snapshot.docs
           .map((d) => ({ ...d.data(), id: d.id }))
           .filter((u) => u.date === todayStr)
-          // 2. Sort strictly numerically: 1, 2, 3... (Not "1", "10", "2")
+          // 2. Sort strictly numerically: 1, 2, 3...
           .sort((a, b) => Number(a.queueNumber) - Number(b.queueNumber));
 
         // 3. Find MY specific position in this sorted list
@@ -1192,8 +1187,12 @@ function ScannerScreen({ token, locationId, isReady, user }) {
           (u) => Number(u.queueNumber) === Number(myQueueNumber)
         );
 
-        // 4. If I am at index 0, it means I am first.
-        setPeopleAhead(myIndex >= 0 ? myIndex : 0);
+        // 4. Update index (safe handling)
+        if (myIndex === -1) {
+          setPeopleAhead(null); // Not found in queue
+        } else {
+          setPeopleAhead(myIndex); // Strict index
+        }
       });
       return () => unsubscribe();
     }
@@ -1412,7 +1411,13 @@ function ScannerScreen({ token, locationId, isReady, user }) {
               Users Remaining Before You
             </div>
             <div className="text-4xl font-bold">
-              {peopleAhead === 0 ? "It's your turn!" : formatNum(peopleAhead)}
+              {peopleAhead === null ? (
+                <Loader className="animate-spin inline" />
+              ) : peopleAhead === 0 ? (
+                "It's your turn!"
+              ) : (
+                formatNum(peopleAhead)
+              )}
             </div>
           </div>
         </div>
