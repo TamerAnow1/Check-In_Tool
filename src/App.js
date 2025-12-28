@@ -37,6 +37,7 @@ import {
   Users,
   CheckSquare,
   XCircle,
+  WifiOff, // New icon for "Away" users
 } from "lucide-react";
 
 // --- ERROR BOUNDARY ---
@@ -85,8 +86,11 @@ const firebaseConfig = {
 
 // --- SETTINGS ---
 const TEST_MODE = false;
-const SAFETY_CLEANUP_MS = 24 * 60 * 60 * 1000;
 const POPUP_COUNTDOWN_SEC = 15;
+
+// ✅ NEW: HEARTBEAT LOGIC
+// If we haven't heard from a phone in 3 mins, we treat them as "Away"
+const HEARTBEAT_LIMIT_MS = 3 * 60 * 1000;
 
 // --- GEO-FENCING CONFIG ---
 const GEOFENCE_RADIUS_METERS = 100;
@@ -132,6 +136,13 @@ const haversineDistance = (coords1, coords2) => {
     Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
+};
+
+// Check if user is "Alive" based on heartbeat
+const isUserAlive = (lastActiveTimestamp) => {
+  if (!lastActiveTimestamp) return false;
+  const diff = Date.now() - lastActiveTimestamp.toMillis();
+  return diff < HEARTBEAT_LIMIT_MS;
 };
 
 export default function App() {
@@ -314,35 +325,6 @@ function KioskScreen({ isReady, locationId }) {
   const [isDownloading, setIsDownloading] = useState(false);
   const [wakeLockActive, setWakeLockActive] = useState(false);
   const lastSignalRef = useRef(null);
-  const scansRef = useRef(recentScans);
-
-  useEffect(() => {
-    scansRef.current = recentScans;
-  }, [recentScans]);
-
-  useEffect(() => {
-    if (!isReady || !db) return;
-    const cleanupInterval = setInterval(async () => {
-      const now = Date.now();
-      const currentScans = scansRef.current;
-      currentScans.forEach(async (user) => {
-        if (user.status === "waiting") {
-          const lastActive =
-            user.lastActive?.toMillis() || user.timestamp?.toMillis() || 0;
-          if (now - lastActive > SAFETY_CLEANUP_MS) {
-            try {
-              await updateDoc(doc(db, COLLECTION_NAME, user.id), {
-                status: "abandoned",
-              });
-            } catch (e) {
-              console.error(e);
-            }
-          }
-        }
-      });
-    }, 60000);
-    return () => clearInterval(cleanupInterval);
-  }, [isReady]);
 
   const toggleFullScreen = () => {
     if (!document.fullscreenElement)
@@ -473,15 +455,22 @@ function KioskScreen({ isReady, locationId }) {
       collection(db, COLLECTION_NAME),
       where("locationId", "==", locationId)
     );
+
+    // ✅ KIOSK HEARTBEAT FILTER
     const unsubscribe = onSnapshot(safeQ, (snapshot) => {
       const todayStr = getTodayStr();
       const allScans = snapshot.docs
         .map((doc) => ({ id: doc.id, ...doc.data() }))
-        .filter(
-          (u) =>
-            (u.status === "waiting" || u.status === "active") &&
-            u.date === todayStr
-        );
+        .filter((u) => {
+          // Status Check
+          const isActive = u.status === "waiting" || u.status === "active";
+          // Date Check
+          const isToday = u.date === todayStr;
+          // Heartbeat Check: Only show if alive within 3 mins
+          const isAlive = isUserAlive(u.lastActive);
+
+          return isActive && isToday && isAlive;
+        });
 
       allScans.sort(
         (a, b) =>
@@ -668,7 +657,6 @@ function AdminScreen({ isReady, onBack }) {
       selectedStart.setHours(0, 0, 0, 0);
       const selectedEnd = new Date(selectedStart);
       selectedEnd.setDate(selectedEnd.getDate() + 7);
-
       data = data.filter((d) => {
         if (!d.timestamp) return false;
         const scanTime = d.timestamp.toDate();
@@ -681,10 +669,12 @@ function AdminScreen({ isReady, onBack }) {
   const calculateTurns = (filteredData) => {
     const nowServingMap = {};
     LOCATIONS.forEach((loc) => {
+      // ✅ HEARTBEAT CHECK for Badge
       const locUsers = filteredData.filter(
         (d) =>
           d.locationId === loc &&
-          (d.status === "waiting" || d.status === "active")
+          (d.status === "waiting" || d.status === "active") &&
+          isUserAlive(d.lastActive)
       );
       locUsers.sort((a, b) => Number(a.queueNumber) - Number(b.queueNumber));
       if (locUsers.length > 0) {
@@ -703,9 +693,13 @@ function AdminScreen({ isReady, onBack }) {
       if (stats[d.locationId]) {
         const uniqueId = d.userName || d.deviceId || "unknown";
         stats[d.locationId].unique_all.add(uniqueId);
-        if (d.status === "waiting" || d.status === "active")
+        // Only count ALIVE users as waiting
+        if (
+          (d.status === "waiting" || d.status === "active") &&
+          isUserAlive(d.lastActive)
+        ) {
           stats[d.locationId].waiting++;
-        else if (d.status === "abandoned")
+        } else if (d.status === "abandoned")
           stats[d.locationId].abandoned.add(uniqueId);
       }
     });
@@ -993,19 +987,44 @@ function AdminScreen({ isReady, onBack }) {
                 {scans.map((s, index) => {
                   const isWaiting =
                     s.status === "waiting" || s.status === "active";
+                  const isAlive = isUserAlive(s.lastActive);
+
+                  // Calculate Pos only for ALIVE & WAITING users
+                  // We need to count how many alive/waiting are ABOVE this index
+                  let pos = "-";
+                  if (isWaiting) {
+                    if (isAlive) {
+                      // Filter the whole list to see where this user stands among ALIVE users
+                      const aliveUsers = scans.filter(
+                        (u) =>
+                          (u.status === "waiting" || u.status === "active") &&
+                          isUserAlive(u.lastActive)
+                      );
+                      const myRank = aliveUsers.findIndex((u) => u.id === s.id);
+                      pos = myRank === 0 ? "NOW" : myRank + 1;
+                    } else {
+                      pos = "Away";
+                    }
+                  }
+
                   return (
-                    <tr key={s.id} className="hover:bg-slate-50">
+                    <tr
+                      key={s.id}
+                      className={`hover:bg-slate-50 ${
+                        !isAlive && isWaiting ? "opacity-50 bg-slate-100" : ""
+                      }`}
+                    >
                       <td className="px-6 py-4 font-bold text-blue-600">
-                        {isWaiting ? (
-                          index === 0 ? (
-                            <div className="flex items-center px-2 py-1 bg-green-100 text-green-700 text-[10px] font-bold rounded-full w-fit animate-pulse whitespace-nowrap">
-                              <CheckCircle size={12} className="mr-1" /> NOW
-                            </div>
-                          ) : (
-                            index + 1
-                          )
+                        {pos === "NOW" ? (
+                          <div className="flex items-center px-2 py-1 bg-green-100 text-green-700 text-[10px] font-bold rounded-full w-fit animate-pulse whitespace-nowrap">
+                            <CheckCircle size={12} className="mr-1" /> NOW
+                          </div>
+                        ) : pos === "Away" ? (
+                          <div className="flex items-center text-slate-400 text-xs font-bold">
+                            <WifiOff size={12} className="mr-1" /> AWAY
+                          </div>
                         ) : (
-                          "-"
+                          pos
                         )}
                       </td>
                       <td className="px-6 py-4">{s.locationId}</td>
@@ -1056,7 +1075,7 @@ function AdminScreen({ isReady, onBack }) {
   );
 }
 
-// --- SCREEN 4: SCANNER (AGGRESSIVE GEOFENCING MODE) ---
+// --- SCREEN 4: SCANNER ---
 function ScannerScreen({ token, locationId, isReady, user }) {
   const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
@@ -1077,23 +1096,57 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   const [debugDist, setDebugDist] = useState(0);
   const [debugAcc, setDebugAcc] = useState(0);
 
-  // --- GEOFENCE WATCHER (Points 2 & 3: High Accuracy + Polling) ---
+  // --- GEOFENCE WATCHER ---
   useEffect(() => {
     if (!myDocId || isCheckedOut) return;
     if (!LOCATIONS_COORDS[locationId]) return;
     if (!navigator.geolocation) return;
 
-    // 1. PASSIVE WATCHER
     const watchId = navigator.geolocation.watchPosition(
-      (pos) => checkGeofence(pos),
-      (err) => console.warn("Watch Error:", err),
+      async (position) => {
+        const userLat = position.coords.latitude;
+        const userLng = position.coords.longitude;
+        const accuracy = position.coords.accuracy;
+
+        setDebugAcc(Math.round(accuracy));
+
+        if (accuracy > 500) return;
+
+        const dist = haversineDistance(
+          { lat: userLat, lng: userLng },
+          LOCATIONS_COORDS[locationId]
+        );
+        setDebugDist(Math.round(dist));
+
+        // BUFFERED KICK LOGIC
+        if (dist - accuracy > GEOFENCE_RADIUS_METERS) {
+          if (db && myDocId) {
+            try {
+              await updateDoc(doc(db, COLLECTION_NAME, myDocId), {
+                status: "abandoned",
+              });
+              setIsCheckedOut(true);
+            } catch (e) {
+              console.error("Geofence exit fail", e);
+            }
+          }
+        }
+      },
+      (err) => console.log("Geo watch error", err),
       { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
     );
 
-    // 2. ACTIVE POLLING (Forces update every 5s)
+    // HEARTBEAT + POLLING
     const pollInterval = setInterval(() => {
       navigator.geolocation.getCurrentPosition(
-        (pos) => checkGeofence(pos),
+        (pos) => {
+          // Also update timestamp to prove life
+          if (db && myDocId && !isCheckedOut) {
+            updateDoc(doc(db, COLLECTION_NAME, myDocId), {
+              lastActive: serverTimestamp(),
+            });
+          }
+        },
         (err) => console.warn("Poll Error:", err),
         { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
       );
@@ -1105,94 +1158,8 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     };
   }, [myDocId, isCheckedOut, locationId]);
 
-  // --- REUSABLE CHECK FUNCTION (BUFFERED LOGIC RESTORED) ---
-  const checkGeofence = async (position) => {
-    if (isCheckedOut || !myDocId) return;
-
-    const userLat = position.coords.latitude;
-    const userLng = position.coords.longitude;
-    const accuracy = position.coords.accuracy;
-
-    setDebugAcc(Math.round(accuracy));
-
-    // Calculate Distance
-    const dist = haversineDistance(
-      { lat: userLat, lng: userLng },
-      LOCATIONS_COORDS[locationId]
-    );
-    setDebugDist(Math.round(dist));
-
-    // --- KICK LOGIC WITH BUFFER ---
-    // User is kicked ONLY if: (Distance - Accuracy) > Radius
-    // This gives them the benefit of the doubt if GPS is fuzzy.
-    if (dist - accuracy > GEOFENCE_RADIUS_METERS) {
-      console.log(
-        `KICK TRIGGERED: (Dist ${dist} - Acc ${accuracy}) > ${GEOFENCE_RADIUS_METERS}`
-      );
-      if (db && myDocId) {
-        try {
-          await updateDoc(doc(db, COLLECTION_NAME, myDocId), {
-            status: "abandoned",
-          });
-          setIsCheckedOut(true);
-        } catch (e) {
-          console.error("Geofence exit fail", e);
-        }
-      }
-    }
-  };
-
-  // WAKE UP CHECK
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => checkGeofence(pos),
-          (err) => console.log("Wake check failed", err),
-          { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
-        );
-        if (db && myDocId && !isCheckedOut) {
-          updateDoc(doc(db, COLLECTION_NAME, myDocId), {
-            lastActive: serverTimestamp(),
-          });
-        }
-      }
-    };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () =>
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [myDocId, isCheckedOut, locationId]);
-
-  useEffect(() => {
-    if (status === "success" && myDocId && !isCheckedOut) {
-      const beat = setInterval(async () => {
-        try {
-          await updateDoc(doc(db, COLLECTION_NAME, myDocId), {
-            lastActive: serverTimestamp(),
-          });
-        } catch (e) {
-          console.error("Heartbeat fail", e);
-        }
-      }, 60000);
-      return () => clearInterval(beat);
-    }
-  }, [status, myDocId, isCheckedOut]);
-
-  useEffect(() => {
-    if (myDocId) {
-      const unsub = onSnapshot(doc(db, COLLECTION_NAME, myDocId), (docSnap) => {
-        if (docSnap.exists()) {
-          const d = docSnap.data();
-          setStatusFromDB(d.status);
-          if (d.status === "completed" || d.status === "abandoned")
-            setIsCheckedOut(true);
-        }
-      });
-      return () => unsub();
-    }
-  }, [myDocId]);
-
-  useEffect(() => {
+    // Only beep if peopleAhead is 0 AND not checked out
     if (status === "success" && !isCheckedOut && peopleAhead === 0) {
       const audio = new Audio(
         "https://actions.google.com/sounds/v1/alarms/beep_short.ogg"
@@ -1201,6 +1168,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     }
   }, [peopleAhead, status, isCheckedOut]);
 
+  // ✅ CRITICAL: PEOPLE AHEAD CALCULATION WITH HEARTBEAT
   useEffect(() => {
     if (
       status === "success" &&
@@ -1216,16 +1184,26 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       );
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const todayStr = getTodayStr();
+
+        // 1. Get ONLY ALIVE users
         const activeUsers = snapshot.docs
           .map((d) => ({ ...d.data(), id: d.id }))
-          .filter((u) => u.date === todayStr)
+          .filter((u) => {
+            return u.date === todayStr && isUserAlive(u.lastActive);
+          })
           .sort((a, b) => Number(a.queueNumber) - Number(b.queueNumber));
 
+        // 3. Find index
         const myIndex = activeUsers.findIndex(
           (u) => Number(u.queueNumber) === Number(myQueueNumber)
         );
 
+        // 4. Update
         if (myIndex === -1) {
+          // If I am not found in "Alive" list, it might mean *I* am the ghost (or refreshing).
+          // If I am the user, I am obviously alive, so I assume I am just not active yet.
+          // BUT, to be safe, if myIndex is -1, we show a loader or 0 if I am technically waiting.
+          // Actually, if I am the current user and my data is fresh, I should be in the list.
           setPeopleAhead(null);
         } else {
           setPeopleAhead(myIndex);
@@ -1460,6 +1438,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
               Users Remaining Before You
             </div>
             <div className="text-4xl font-bold">
+              {/* ✅ SAFE LOADING STATE */}
               {peopleAhead === null ? (
                 <Loader className="animate-spin inline" />
               ) : peopleAhead === 0 ? (
