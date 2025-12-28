@@ -94,7 +94,7 @@ const POPUP_COUNTDOWN_SEC = 15; // Variable kept to prevent reference errors
 
 // --- GEO-FENCING CONFIG ---
 // ✅ UPDATED: Radius set to 70m
-const GEOFENCE_RADIUS_METERS = 70; 
+const GEOFENCE_RADIUS_METERS = 70;
 const LOCATIONS_COORDS = {
   QCA5: { lat: 30.004567, lng: 31.422211 },
   // Add other locations here
@@ -412,7 +412,8 @@ function KioskScreen({ isReady, locationId }) {
           if (serverTime !== lastSignalRef.current) {
             console.log("New Refresh Signal Detected! Resetting...");
             lastSignalRef.current = serverTime;
-            window.location.href = window.location.origin + window.location.pathname;
+            window.location.href =
+              window.location.origin + window.location.pathname;
           }
         }
       }
@@ -771,8 +772,7 @@ function AdminScreen({ isReady, onBack }) {
       data = data.filter((d) => d.locationId === filterLoc);
 
     data.sort(
-      (a, b) =>
-        (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
+      (a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
     );
 
     const csvHeader = [
@@ -819,11 +819,11 @@ function AdminScreen({ isReady, onBack }) {
         id: doc.id,
         ...doc.data(),
       }));
-      
+
       calculateTurns(rawData);
       const dateFilteredData = applyFilters(rawData);
       calculateStoreStats(dateFilteredData);
-      
+
       let tableData = dateFilteredData;
       if (filterLoc !== "ALL") {
         tableData = tableData.filter((d) => d.locationId === filterLoc);
@@ -1063,7 +1063,7 @@ function AdminScreen({ isReady, onBack }) {
                           >
                             <XCircle size={18} />
                           </button>
-                          
+
                           {activeTurnMap[s.locationId] === s.queueNumber && (
                             <div className="flex items-center px-2 py-1 bg-green-100 text-green-700 text-[10px] font-bold rounded-full animate-pulse whitespace-nowrap">
                               <CheckCircle size={12} className="mr-1" /> NOW
@@ -1105,7 +1105,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   const [countdown, setCountdown] = useState(POPUP_COUNTDOWN_SEC);
 
   const [statusFromDB, setStatusFromDB] = useState("waiting");
-  
+
   // Debug State
   const [debugDist, setDebugDist] = useState(0);
   const [debugAcc, setDebugAcc] = useState(0);
@@ -1158,21 +1158,26 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         if (myDocId && !isCheckedOut && LOCATIONS_COORDS[locationId]) {
-           if (navigator.geolocation) {
-             navigator.geolocation.getCurrentPosition(
+          if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
               async (position) => {
                 const dist = haversineDistance(
-                  { lat: position.coords.latitude, lng: position.coords.longitude },
+                  {
+                    lat: position.coords.latitude,
+                    lng: position.coords.longitude,
+                  },
                   LOCATIONS_COORDS[locationId]
                 );
                 if (dist > GEOFENCE_RADIUS_METERS) {
-                  await updateDoc(doc(db, COLLECTION_NAME, myDocId), { status: "abandoned" });
+                  await updateDoc(doc(db, COLLECTION_NAME, myDocId), {
+                    status: "abandoned",
+                  });
                   setIsCheckedOut(true);
                 }
               },
               (err) => console.log("Wake check failed", err)
-             );
-           }
+            );
+          }
         }
         if (db && myDocId && !isCheckedOut) {
           updateDoc(doc(db, COLLECTION_NAME, myDocId), {
@@ -1182,15 +1187,12 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       }
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [myDocId, isCheckedOut, locationId]);
 
   useEffect(() => {
-    if (
-      status === "success" &&
-      myDocId &&
-      !isCheckedOut
-    ) {
+    if (status === "success" && myDocId && !isCheckedOut) {
       const beat = setInterval(async () => {
         try {
           await updateDoc(doc(db, COLLECTION_NAME, myDocId), {
@@ -1256,11 +1258,11 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
   useEffect(() => {
     if (!isReady || !db) return;
-    
+
     if (!locationId) {
-        setStatus("error");
-        setErrorMsg("Invalid QR Code (Missing Location)");
-        return;
+      setStatus("error");
+      setErrorMsg("Invalid QR Code (Missing Location)");
+      return;
     }
 
     const init = async () => {
@@ -1328,19 +1330,21 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
   const confirmAndCheckIn = () => {
     if (!navigator.geolocation) {
-        setStatus("error");
-        setErrorMsg("Your browser does not support location tracking. Please use Chrome or Safari.");
-        return;
+      setStatus("error");
+      setErrorMsg(
+        "Your browser does not support location tracking. Please use Chrome or Safari."
+      );
+      return;
     }
 
     setShowPermissionModal(false);
     setStatus("locating");
-    
+
     navigator.geolocation.getCurrentPosition(
       (pos) => saveCheckIn(pos.coords),
       (err) => {
-          setStatus("error");
-          setErrorMsg("Location access denied. Please allow GPS to check in.");
+        setStatus("error");
+        setErrorMsg("Location access denied. Please allow GPS to check in.");
       }
     );
   };
@@ -1354,7 +1358,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         where("status", "in", ["waiting", "active"])
       );
       const zombieSnap = await getDocs(zombieQ);
-      
+
       let resumeDoc = null;
 
       if (!zombieSnap.empty) {
@@ -1364,7 +1368,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
             resumeDoc = docSnap;
           } else {
             await updateDoc(doc(db, COLLECTION_NAME, docSnap.id), {
-              status: "abandoned"
+              status: "abandoned",
             });
           }
         }
@@ -1383,7 +1387,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
       const todayStr = new Date().toISOString().split("T")[0];
       const newRef = doc(collection(db, COLLECTION_NAME));
-      
+
       const qNum = await runTransaction(db, async (t) => {
         const cRef = doc(db, COUNTER_COLLECTION, locationId);
         const cSnap = await t.get(cRef);
@@ -1421,7 +1425,9 @@ function ScannerScreen({ token, locationId, isReady, user }) {
           <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-6 text-red-600">
             <XCircle size={32} />
           </div>
-          <h2 className="text-xl font-bold text-red-800 mb-2">You Left the Area</h2>
+          <h2 className="text-xl font-bold text-red-800 mb-2">
+            You Left the Area
+          </h2>
           <p className="text-slate-600 mb-6">
             You must stay near the store to keep your spot.
           </p>
@@ -1485,11 +1491,12 @@ function ScannerScreen({ token, locationId, isReady, user }) {
             </div>
           </div>
         </div>
-        
+
         {/* DEBUG PANEL (Visible for testing) */}
         {LOCATIONS_COORDS[locationId] && (
           <div className="absolute bottom-4 left-4 right-4 bg-black/50 text-white p-2 rounded text-[10px] font-mono pointer-events-none">
-            DEBUG: Dist {debugDist}m (Limit {GEOFENCE_RADIUS_METERS}m) | Acc ±{debugAcc}m
+            DEBUG: Dist {debugDist}m (Limit {GEOFENCE_RADIUS_METERS}m) | Acc ±
+            {debugAcc}m
           </div>
         )}
       </div>
