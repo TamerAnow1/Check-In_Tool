@@ -37,7 +37,7 @@ import {
   Users,
   CheckSquare,
   XCircle,
-  WifiOff, // New icon for "Away" users
+  WifiOff,
 } from "lucide-react";
 
 // --- ERROR BOUNDARY ---
@@ -88,9 +88,12 @@ const firebaseConfig = {
 const TEST_MODE = false;
 const POPUP_COUNTDOWN_SEC = 15;
 
-// ✅ NEW: HEARTBEAT LOGIC
-// If we haven't heard from a phone in 3 mins, we treat them as "Away"
+// HEARTBEAT LOGIC (Visual Only - Determines if they show as 'Away')
 const HEARTBEAT_LIMIT_MS = 3 * 60 * 1000;
+
+// ✅ UPDATED: HARD RESET TIMEOUT (40 Minutes)
+// If user scans QR and hasn't been seen for 40 mins, force NEW ticket.
+const ABANDONMENT_LIMIT_MS = 40 * 60 * 1000; 
 
 // --- GEO-FENCING CONFIG ---
 const GEOFENCE_RADIUS_METERS = 100;
@@ -669,7 +672,6 @@ function AdminScreen({ isReady, onBack }) {
   const calculateTurns = (filteredData) => {
     const nowServingMap = {};
     LOCATIONS.forEach((loc) => {
-      // ✅ HEARTBEAT CHECK for Badge
       const locUsers = filteredData.filter(
         (d) =>
           d.locationId === loc &&
@@ -693,7 +695,6 @@ function AdminScreen({ isReady, onBack }) {
       if (stats[d.locationId]) {
         const uniqueId = d.userName || d.deviceId || "unknown";
         stats[d.locationId].unique_all.add(uniqueId);
-        // Only count ALIVE users as waiting
         if (
           (d.status === "waiting" || d.status === "active") &&
           isUserAlive(d.lastActive)
@@ -989,12 +990,9 @@ function AdminScreen({ isReady, onBack }) {
                     s.status === "waiting" || s.status === "active";
                   const isAlive = isUserAlive(s.lastActive);
 
-                  // Calculate Pos only for ALIVE & WAITING users
-                  // We need to count how many alive/waiting are ABOVE this index
                   let pos = "-";
                   if (isWaiting) {
                     if (isAlive) {
-                      // Filter the whole list to see where this user stands among ALIVE users
                       const aliveUsers = scans.filter(
                         (u) =>
                           (u.status === "waiting" || u.status === "active") &&
@@ -1200,10 +1198,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
         // 4. Update
         if (myIndex === -1) {
-          // If I am not found in "Alive" list, it might mean *I* am the ghost (or refreshing).
-          // If I am the user, I am obviously alive, so I assume I am just not active yet.
-          // BUT, to be safe, if myIndex is -1, we show a loader or 0 if I am technically waiting.
-          // Actually, if I am the current user and my data is fresh, I should be in the list.
           setPeopleAhead(null);
         } else {
           setPeopleAhead(myIndex);
@@ -1325,17 +1319,29 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       );
 
       if (uniqueDocs.length > 0) {
-        uniqueDocs.sort((a, b) => a.data().queueNumber - b.data().queueNumber);
         const bestTicket = uniqueDocs[0];
-        for (let i = 1; i < uniqueDocs.length; i++) {
-          await updateDoc(doc(db, COLLECTION_NAME, uniqueDocs[i].id), {
-            status: "abandoned",
-          });
+        // ✅ NEW: CHECK FOR ABANDONMENT
+        // If the ticket has been inactive for too long, kill it.
+        const lastActiveTime = bestTicket.data().lastActive
+          ? bestTicket.data().lastActive.toMillis()
+          : 0;
+        const now = Date.now();
+
+        if (now - lastActiveTime > ABANDONMENT_LIMIT_MS) {
+          // EXPIRE OLD TICKET
+          for (let docSnap of uniqueDocs) {
+            await updateDoc(doc(db, COLLECTION_NAME, docSnap.id), {
+              status: "abandoned",
+            });
+          }
+          // Proceed to create a NEW ticket below...
+        } else {
+          // RESUME TICKET (Standard behavior)
+          setMyQueueNumber(bestTicket.data().queueNumber);
+          setMyDocId(bestTicket.id);
+          setStatus("success");
+          return;
         }
-        setMyQueueNumber(bestTicket.data().queueNumber);
-        setMyDocId(bestTicket.id);
-        setStatus("success");
-        return;
       }
 
       const todayStr = getTodayStr();
