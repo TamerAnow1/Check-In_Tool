@@ -91,9 +91,9 @@ const POPUP_COUNTDOWN_SEC = 15;
 // HEARTBEAT LOGIC (Visual Only - Determines if they show as 'Away')
 const HEARTBEAT_LIMIT_MS = 3 * 60 * 1000;
 
-// ✅ UPDATED: HARD RESET TIMEOUT (40 Minutes)
+// HARD RESET TIMEOUT (40 Minutes)
 // If user scans QR and hasn't been seen for 40 mins, force NEW ticket.
-const ABANDONMENT_LIMIT_MS = 40 * 60 * 1000; 
+const ABANDONMENT_LIMIT_MS = 40 * 60 * 1000;
 
 // --- GEO-FENCING CONFIG ---
 const GEOFENCE_RADIUS_METERS = 100;
@@ -465,13 +465,9 @@ function KioskScreen({ isReady, locationId }) {
       const allScans = snapshot.docs
         .map((doc) => ({ id: doc.id, ...doc.data() }))
         .filter((u) => {
-          // Status Check
           const isActive = u.status === "waiting" || u.status === "active";
-          // Date Check
           const isToday = u.date === todayStr;
-          // Heartbeat Check: Only show if alive within 3 mins
           const isAlive = isUserAlive(u.lastActive);
-
           return isActive && isToday && isAlive;
         });
 
@@ -991,6 +987,8 @@ function AdminScreen({ isReady, onBack }) {
                   const isAlive = isUserAlive(s.lastActive);
 
                   let pos = "-";
+                  let awayMins = 0;
+
                   if (isWaiting) {
                     if (isAlive) {
                       const aliveUsers = scans.filter(
@@ -1002,6 +1000,11 @@ function AdminScreen({ isReady, onBack }) {
                       pos = myRank === 0 ? "NOW" : myRank + 1;
                     } else {
                       pos = "Away";
+                      // Calculate minutes away if inactive
+                      if (s.lastActive) {
+                        const diff = Date.now() - s.lastActive.toMillis();
+                        awayMins = Math.floor(diff / 60000);
+                      }
                     }
                   }
 
@@ -1018,8 +1021,13 @@ function AdminScreen({ isReady, onBack }) {
                             <CheckCircle size={12} className="mr-1" /> NOW
                           </div>
                         ) : pos === "Away" ? (
-                          <div className="flex items-center text-slate-400 text-xs font-bold">
-                            <WifiOff size={12} className="mr-1" /> AWAY
+                          <div className="flex flex-col">
+                            <div className="flex items-center text-slate-400 text-xs font-bold">
+                              <WifiOff size={12} className="mr-1" /> AWAY
+                            </div>
+                            <div className="text-[10px] text-red-400 font-medium">
+                              {awayMins}m ago
+                            </div>
                           </div>
                         ) : (
                           pos
