@@ -103,6 +103,7 @@ const RESCAN_PENALTY_MS = 15 * 60 * 1000;
 const GEOFENCE_RADIUS_METERS = 100;
 const LOCATIONS_COORDS = {
   QCA5: { lat: 30.004567, lng: 31.422211 },
+  QCA4: { lat: 30.055537, lng: 30.9568635 }, // Added QCA4
 };
 
 const COLLECTION_NAME = "checkins";
@@ -1538,6 +1539,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
               Users Remaining Before You
             </div>
             <div className="text-4xl font-bold">
+              {/* ✅ SAFE LOADING STATE */}
               {peopleAhead === null ? (
                 <Loader className="animate-spin inline" />
               ) : peopleAhead === 0 ? (
@@ -1548,6 +1550,8 @@ function ScannerScreen({ token, locationId, isReady, user }) {
             </div>
           </div>
         </div>
+
+        {/* DEBUG PANEL */}
         {LOCATIONS_COORDS[locationId] && (
           <div className="absolute bottom-4 left-4 right-4 bg-black/50 text-white p-2 rounded text-[10px] font-mono pointer-events-none">
             DEBUG: Dist {debugDist}m (Limit {GEOFENCE_RADIUS_METERS}m) | Acc ±
