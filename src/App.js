@@ -95,6 +95,10 @@ const HEARTBEAT_LIMIT_MS = 3 * 60 * 1000;
 // If user scans QR and hasn't been seen for 40 mins, force NEW ticket.
 const ABANDONMENT_LIMIT_MS = 40 * 60 * 1000;
 
+// RESCAN PENALTY (15 Minutes)
+// If user scans a NEW QR code within 15 mins of their last ticket, reset them.
+const RESCAN_PENALTY_MS = 15 * 60 * 1000;
+
 // --- GEO-FENCING CONFIG ---
 const GEOFENCE_RADIUS_METERS = 100;
 const LOCATIONS_COORDS = {
@@ -329,6 +333,46 @@ function KioskScreen({ isReady, locationId }) {
   const [wakeLockActive, setWakeLockActive] = useState(false);
   const lastSignalRef = useRef(null);
 
+  const scansRef = useRef(recentScans);
+  useEffect(() => {
+    scansRef.current = recentScans;
+  }, [recentScans]);
+
+  useEffect(() => {
+    if (!isReady || !db) return;
+
+    // AUTOMATED CLEANUP (Every 60s)
+    const cleanupInterval = setInterval(async () => {
+      const now = Date.now();
+      const q = query(
+        collection(db, COLLECTION_NAME),
+        where("locationId", "==", locationId),
+        where("status", "in", ["waiting", "active"])
+      );
+
+      const snapshot = await getDocs(q);
+
+      snapshot.docs.forEach(async (docSnap) => {
+        const d = docSnap.data();
+        const lastActive =
+          d.lastActive?.toMillis() || d.timestamp?.toMillis() || 0;
+
+        // Auto-Abandon after 40 mins
+        if (now - lastActive > ABANDONMENT_LIMIT_MS) {
+          try {
+            await updateDoc(doc(db, COLLECTION_NAME, docSnap.id), {
+              status: "abandoned",
+            });
+          } catch (e) {
+            console.error(e);
+          }
+        }
+      });
+    }, 60000);
+
+    return () => clearInterval(cleanupInterval);
+  }, [isReady, locationId]);
+
   const toggleFullScreen = () => {
     if (!document.fullscreenElement)
       document.documentElement.requestFullscreen();
@@ -459,7 +503,6 @@ function KioskScreen({ isReady, locationId }) {
       where("locationId", "==", locationId)
     );
 
-    // ✅ KIOSK HEARTBEAT FILTER
     const unsubscribe = onSnapshot(safeQ, (snapshot) => {
       const todayStr = getTodayStr();
       const allScans = snapshot.docs
@@ -1000,7 +1043,6 @@ function AdminScreen({ isReady, onBack }) {
                       pos = myRank === 0 ? "NOW" : myRank + 1;
                     } else {
                       pos = "Away";
-                      // Calculate minutes away if inactive
                       if (s.lastActive) {
                         const diff = Date.now() - s.lastActive.toMillis();
                         awayMins = Math.floor(diff / 60000);
@@ -1090,6 +1132,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   const [userEmail, setUserEmail] = useState("");
   const [myQueueNumber, setMyQueueNumber] = useState(null);
   const [myDocId, setMyDocId] = useState(null);
+  const [ticketTime, setTicketTime] = useState(null);
   const [peopleAhead, setPeopleAhead] = useState(null);
   const [isCheckedOut, setIsCheckedOut] = useState(false);
   const [showEmailModal, setShowEmailModal] = useState(false);
@@ -1124,8 +1167,17 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         );
         setDebugDist(Math.round(dist));
 
+        // ✅ GRACE PERIOD (2 Mins)
+        let isImmune = false;
+        if (ticketTime) {
+          const ageMs = Date.now() - ticketTime.toMillis();
+          if (ageMs < 2 * 60 * 1000) {
+            isImmune = true;
+          }
+        }
+
         // BUFFERED KICK LOGIC
-        if (dist - accuracy > GEOFENCE_RADIUS_METERS) {
+        if (!isImmune && dist - accuracy > GEOFENCE_RADIUS_METERS) {
           if (db && myDocId) {
             try {
               await updateDoc(doc(db, COLLECTION_NAME, myDocId), {
@@ -1146,7 +1198,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     const pollInterval = setInterval(() => {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
-          // Also update timestamp to prove life
           if (db && myDocId && !isCheckedOut) {
             updateDoc(doc(db, COLLECTION_NAME, myDocId), {
               lastActive: serverTimestamp(),
@@ -1162,7 +1213,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       navigator.geolocation.clearWatch(watchId);
       clearInterval(pollInterval);
     };
-  }, [myDocId, isCheckedOut, locationId]);
+  }, [myDocId, isCheckedOut, locationId, ticketTime]);
 
   useEffect(() => {
     // Only beep if peopleAhead is 0 AND not checked out
@@ -1328,25 +1379,57 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
       if (uniqueDocs.length > 0) {
         const bestTicket = uniqueDocs[0];
-        // ✅ NEW: CHECK FOR ABANDONMENT
-        // If the ticket has been inactive for too long, kill it.
-        const lastActiveTime = bestTicket.data().lastActive
-          ? bestTicket.data().lastActive.toMillis()
-          : 0;
-        const now = Date.now();
+        const ticketData = bestTicket.data();
 
+        // Time Calculations
+        const now = Date.now();
+        const lastActiveTime = ticketData.lastActive
+          ? ticketData.lastActive.toMillis()
+          : 0;
+        const ticketCreationTime = ticketData.timestamp
+          ? ticketData.timestamp.toMillis()
+          : 0;
+        const ticketAge = now - ticketCreationTime;
+
+        // Check if this is a Page Refresh (Safe) or New Scan
+        const isRefresh = ticketData.tokenUsed === token;
+
+        // RULE 1: HARD ABANDONMENT (> 40 mins inactive)
         if (now - lastActiveTime > ABANDONMENT_LIMIT_MS) {
-          // EXPIRE OLD TICKET
           for (let docSnap of uniqueDocs) {
             await updateDoc(doc(db, COLLECTION_NAME, docSnap.id), {
               status: "abandoned",
             });
           }
-          // Proceed to create a NEW ticket below...
-        } else {
-          // RESUME TICKET (Standard behavior)
-          setMyQueueNumber(bestTicket.data().queueNumber);
+          // Fall through to create NEW ticket
+        }
+
+        // RULE 2: RESCAN PENALTY (< 15 mins old & New Scan)
+        else if (!isRefresh && ticketAge < RESCAN_PENALTY_MS) {
+          console.log(
+            "RESCAN PENALTY: User rescanned within 15 mins. Resetting."
+          );
+          for (let docSnap of uniqueDocs) {
+            await updateDoc(doc(db, COLLECTION_NAME, docSnap.id), {
+              status: "abandoned",
+            });
+          }
+          // Fall through to create NEW ticket
+        }
+
+        // RULE 3: RESUME (Safe Refresh OR Old Ticket Rescan)
+        else {
+          setMyQueueNumber(ticketData.queueNumber);
           setMyDocId(bestTicket.id);
+          setTicketTime(ticketData.timestamp);
+
+          if (!isRefresh) {
+            await updateDoc(doc(db, COLLECTION_NAME, bestTicket.id), {
+              tokenUsed: token,
+              lastActive: serverTimestamp(),
+            });
+          }
+
           setStatus("success");
           return;
         }
@@ -1354,6 +1437,8 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
       const todayStr = getTodayStr();
       const newRef = doc(collection(db, COLLECTION_NAME));
+      const nowTimestamp = serverTimestamp();
+
       const qNum = await runTransaction(db, async (t) => {
         const cRef = doc(db, COUNTER_COLLECTION, locationId);
         const cSnap = await t.get(cRef);
@@ -1366,18 +1451,19 @@ function ScannerScreen({ token, locationId, isReady, user }) {
           locationId,
           queueNumber: next,
           deviceId,
-          timestamp: serverTimestamp(),
+          timestamp: nowTimestamp,
           status: "waiting",
           location: { lat: coords.latitude, lng: coords.longitude },
           tokenUsed: token,
           fingerprint,
-          lastActive: serverTimestamp(),
+          lastActive: nowTimestamp,
           date: todayStr,
         });
         return next;
       });
       setMyQueueNumber(qNum);
       setMyDocId(newRef.id);
+      setTicketTime({ toMillis: () => Date.now() });
       setStatus("success");
     } catch (e) {
       setStatus("error");
@@ -1452,7 +1538,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
               Users Remaining Before You
             </div>
             <div className="text-4xl font-bold">
-              {/* ✅ SAFE LOADING STATE */}
               {peopleAhead === null ? (
                 <Loader className="animate-spin inline" />
               ) : peopleAhead === 0 ? (
@@ -1463,8 +1548,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
             </div>
           </div>
         </div>
-
-        {/* DEBUG PANEL */}
         {LOCATIONS_COORDS[locationId] && (
           <div className="absolute bottom-4 left-4 right-4 bg-black/50 text-white p-2 rounded text-[10px] font-mono pointer-events-none">
             DEBUG: Dist {debugDist}m (Limit {GEOFENCE_RADIUS_METERS}m) | Acc ±
