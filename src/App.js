@@ -104,8 +104,8 @@ const GEOFENCE_RADIUS_METERS = 100;
 const LOCATIONS_COORDS = {
   QCA5: { lat: 30.004567, lng: 31.422211 },
   QCA4: { lat: 30.055537, lng: 30.9568635 },
-  QCA3: { lat: 30.0600, lng: 31.3400 },     // Added QCA3 (Nasr City)
-  QCA2: { lat: 30.117660, lng: 31.355875 }, // Added QCA2
+  QCA3: { lat: 30.06, lng: 31.34 }, // Added QCA3 (Nasr City)
+  QCA2: { lat: 30.11766, lng: 31.355875 }, // Added QCA2
 };
 
 const COLLECTION_NAME = "checkins";
@@ -650,14 +650,33 @@ function AdminScreen({ isReady, onBack }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
   const [authError, setAuthError] = useState("");
+
+  // Data State
   const [scans, setScans] = useState([]);
   const [storeStats, setStoreStats] = useState({});
   const [activeTurnMap, setActiveTurnMap] = useState({});
-  const [filterLoc, setFilterLoc] = useState("ALL");
+
+  // --- FILTERS STATE ---
+  const [selectedLocations, setSelectedLocations] = useState([]); // Empty array = ALL
+  const [isLocDropdownOpen, setIsLocDropdownOpen] = useState(false); // UI Toggle
   const [filterDate, setFilterDate] = useState(getTodayStr());
+  const [startTime, setStartTime] = useState("00:00");
+  const [endTime, setEndTime] = useState("23:59");
   const [dateMode, setDateMode] = useState("DAY");
+
   const [isRefreshingKiosks, setIsRefreshingKiosks] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const closeDropdown = (e) => {
+      if (!e.target.closest("#loc-dropdown-container")) {
+        setIsLocDropdownOpen(false);
+      }
+    };
+    document.addEventListener("click", closeDropdown);
+    return () => document.removeEventListener("click", closeDropdown);
+  }, []);
 
   const handleLogin = (e) => {
     e.preventDefault();
@@ -693,8 +712,11 @@ function AdminScreen({ isReady, onBack }) {
     }
   };
 
+  // --- FILTER LOGIC ---
   const applyFilters = (rawDocs) => {
     let data = rawDocs;
+
+    // 1. Date Filter
     if (dateMode === "DAY") {
       data = data.filter((d) => d.date === filterDate);
     } else if (dateMode === "WEEK") {
@@ -708,7 +730,33 @@ function AdminScreen({ isReady, onBack }) {
         return scanTime >= selectedStart && scanTime < selectedEnd;
       });
     }
+
+    // 2. Time Filter
+    data = data.filter((d) => {
+      if (!d.timestamp) return false;
+      const dt = d.timestamp.toDate();
+      const docMinutes = dt.getHours() * 60 + dt.getMinutes();
+
+      const [startH, startM] = startTime.split(":").map(Number);
+      const [endH, endM] = endTime.split(":").map(Number);
+      const startMinutes = startH * 60 + startM;
+      const endMinutes = endH * 60 + endM;
+
+      return docMinutes >= startMinutes && docMinutes <= endMinutes;
+    });
+
+    // 3. Location Filter (Multi-Select)
+    if (selectedLocations.length > 0) {
+      data = data.filter((d) => selectedLocations.includes(d.locationId));
+    }
+
     return data;
+  };
+
+  const toggleLocationSelection = (loc) => {
+    setSelectedLocations((prev) =>
+      prev.includes(loc) ? prev.filter((l) => l !== loc) : [...prev, loc]
+    );
   };
 
   const calculateTurns = (filteredData) => {
@@ -730,10 +778,13 @@ function AdminScreen({ isReady, onBack }) {
 
   const calculateStoreStats = (filteredData) => {
     const stats = {};
+    // Initialize for ALL locations so grid shows zeros even if filtered out
     LOCATIONS.forEach((loc) => {
       stats[loc] = { waiting: 0, unique_all: new Set(), abandoned: new Set() };
     });
+
     filteredData.forEach((d) => {
+      // Safety check if location exists in our config
       if (stats[d.locationId]) {
         const uniqueId = d.userName || d.deviceId || "unknown";
         stats[d.locationId].unique_all.add(uniqueId);
@@ -746,6 +797,7 @@ function AdminScreen({ isReady, onBack }) {
           stats[d.locationId].abandoned.add(uniqueId);
       }
     });
+
     const finalStats = {};
     LOCATIONS.forEach((loc) => {
       finalStats[loc] = {
@@ -762,9 +814,10 @@ function AdminScreen({ isReady, onBack }) {
     const q = query(collection(db, COLLECTION_NAME));
     const snapshot = await getDocs(q);
     let data = snapshot.docs.map((doc) => doc.data());
+
+    // Apply all active filters
     data = applyFilters(data);
-    if (filterLoc !== "ALL")
-      data = data.filter((d) => d.locationId === filterLoc);
+
     data.sort(
       (a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
     );
@@ -807,18 +860,16 @@ function AdminScreen({ isReady, onBack }) {
     const q = query(collection(db, COLLECTION_NAME));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       let rawData = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-      const dateFilteredData = applyFilters(rawData);
-      calculateTurns(dateFilteredData);
-      calculateStoreStats(dateFilteredData);
 
-      let tableData = dateFilteredData;
-      if (filterLoc !== "ALL")
-        tableData = tableData.filter((d) => d.locationId === filterLoc);
+      const filteredData = applyFilters(rawData);
 
-      const activeQueue = tableData
+      calculateTurns(filteredData);
+      calculateStoreStats(filteredData);
+
+      const activeQueue = filteredData
         .filter((u) => u.status === "waiting" || u.status === "active")
         .sort((a, b) => Number(a.queueNumber) - Number(b.queueNumber));
-      const history = tableData
+      const history = filteredData
         .filter((u) => u.status !== "waiting" && u.status !== "active")
         .sort(
           (a, b) =>
@@ -830,7 +881,9 @@ function AdminScreen({ isReady, onBack }) {
     return () => unsubscribe();
   }, [
     isReady,
-    filterLoc,
+    selectedLocations, // Updated dependency
+    startTime, // Updated dependency
+    endTime, // Updated dependency
     filterDate,
     dateMode,
     isAuthenticated,
@@ -877,103 +930,193 @@ function AdminScreen({ isReady, onBack }) {
   return (
     <div className="min-h-screen bg-slate-100 p-6">
       <div className="max-w-7xl mx-auto">
+        {/* Header */}
         <div className="flex justify-between items-center mb-8 gap-4">
-          <button onClick={onBack} className="p-2 bg-white rounded-lg">
+          <button
+            onClick={onBack}
+            className="p-2 bg-white rounded-lg hover:bg-slate-50"
+          >
             <X size={20} />
           </button>
           <h1 className="text-2xl font-bold">Admin Dashboard</h1>
         </div>
-        <div className="flex flex-wrap gap-4 mb-8 bg-white p-4 rounded-xl shadow-sm items-center">
-          <button
-            onClick={handleRemoteRefresh}
-            disabled={isRefreshingKiosks}
-            className="px-4 py-2 bg-purple-600 text-white rounded-lg font-bold flex items-center"
-          >
-            {isRefreshingKiosks ? (
-              <Loader size={16} className="animate-spin mr-2" />
-            ) : (
-              <Zap size={16} className="mr-2" />
-            )}{" "}
-            Reset Kiosks
-          </button>
-          <button
-            onClick={() => setRefreshTrigger((prev) => prev + 1)}
-            className="px-4 py-2 bg-green-600 text-white rounded-lg font-bold flex items-center hover:bg-green-700 transition-colors"
-          >
-            <RefreshCw size={16} className="mr-2" /> Refresh List
-          </button>
-          <div className="flex items-center border rounded-lg overflow-hidden">
+
+        {/* Toolbar */}
+        <div className="flex flex-col xl:flex-row gap-4 mb-8 bg-white p-4 rounded-xl shadow-sm">
+          {/* Action Buttons */}
+          <div className="flex gap-2">
             <button
-              onClick={() => setDateMode("DAY")}
-              className={`px-3 py-2 text-sm font-bold ${
-                dateMode === "DAY"
-                  ? "bg-blue-600 text-white"
-                  : "bg-slate-50 hover:bg-slate-100"
-              }`}
+              onClick={handleRemoteRefresh}
+              disabled={isRefreshingKiosks}
+              className="px-4 py-2 bg-purple-600 text-white rounded-lg font-bold flex items-center text-sm"
             >
-              Day View
+              {isRefreshingKiosks ? (
+                <Loader size={16} className="animate-spin mr-2" />
+              ) : (
+                <Zap size={16} className="mr-2" />
+              )}{" "}
+              Reset Kiosks
             </button>
             <button
-              onClick={() => setDateMode("WEEK")}
-              className={`px-3 py-2 text-sm font-bold ${
-                dateMode === "WEEK"
-                  ? "bg-blue-600 text-white"
-                  : "bg-slate-50 hover:bg-slate-100"
-              }`}
+              onClick={() => setRefreshTrigger((prev) => prev + 1)}
+              className="px-4 py-2 bg-green-600 text-white rounded-lg font-bold flex items-center hover:bg-green-700 transition-colors text-sm"
             >
-              Week View
+              <RefreshCw size={16} className="mr-2" /> Refresh
             </button>
           </div>
-          <div className="flex items-center border rounded-lg px-3 bg-slate-50">
-            <Calendar size={16} className="text-slate-400 mr-2" />
-            <input
-              type="date"
-              value={filterDate}
-              onChange={(e) => setFilterDate(e.target.value)}
-              className="bg-transparent py-2 outline-none"
-            />
+
+          <div className="h-px bg-slate-200 xl:w-px xl:h-auto xl:mx-2"></div>
+
+          {/* Filter Controls */}
+          <div className="flex flex-wrap gap-2 items-center flex-1">
+            {/* Day/Week Toggle */}
+            <div className="flex items-center border rounded-lg overflow-hidden shrink-0">
+              <button
+                onClick={() => setDateMode("DAY")}
+                className={`px-3 py-2 text-xs font-bold ${
+                  dateMode === "DAY"
+                    ? "bg-blue-600 text-white"
+                    : "bg-slate-50 hover:bg-slate-100"
+                }`}
+              >
+                Day
+              </button>
+              <button
+                onClick={() => setDateMode("WEEK")}
+                className={`px-3 py-2 text-xs font-bold ${
+                  dateMode === "WEEK"
+                    ? "bg-blue-600 text-white"
+                    : "bg-slate-50 hover:bg-slate-100"
+                }`}
+              >
+                Week
+              </button>
+            </div>
+
+            {/* Date Picker */}
+            <div className="flex items-center border rounded-lg px-2 bg-slate-50">
+              <Calendar size={14} className="text-slate-400 mr-2" />
+              <input
+                type="date"
+                value={filterDate}
+                onChange={(e) => setFilterDate(e.target.value)}
+                className="bg-transparent py-2 outline-none text-sm w-32"
+              />
+            </div>
+
+            {/* Time Filter */}
+            <div className="flex items-center border rounded-lg px-2 bg-slate-50">
+              <Clock size={14} className="text-slate-400 mr-2" />
+              <input
+                type="time"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+                className="bg-transparent py-2 outline-none text-sm"
+              />
+              <span className="mx-2 text-slate-400">-</span>
+              <input
+                type="time"
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+                className="bg-transparent py-2 outline-none text-sm"
+              />
+            </div>
+
+            {/* Multi-Location Dropdown */}
+            <div className="relative" id="loc-dropdown-container">
+              <button
+                onClick={() => setIsLocDropdownOpen(!isLocDropdownOpen)}
+                className="flex items-center border rounded-lg px-3 py-2 bg-slate-50 text-sm hover:bg-slate-100"
+              >
+                <Filter size={14} className="text-slate-400 mr-2" />
+                {selectedLocations.length === 0
+                  ? "All Stores"
+                  : `${selectedLocations.length} Selected`}
+              </button>
+
+              {isLocDropdownOpen && (
+                <div className="absolute top-full left-0 mt-2 w-48 max-h-60 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-xl z-50 p-2">
+                  <div
+                    onClick={() => setSelectedLocations([])}
+                    className={`p-2 rounded cursor-pointer text-sm font-bold flex items-center ${
+                      selectedLocations.length === 0
+                        ? "bg-blue-50 text-blue-600"
+                        : "hover:bg-slate-50"
+                    }`}
+                  >
+                    {selectedLocations.length === 0 ? (
+                      <CheckSquare size={14} className="mr-2" />
+                    ) : (
+                      <div className="w-5" />
+                    )}
+                    All Stores
+                  </div>
+                  <div className="h-px bg-slate-100 my-1"></div>
+                  {LOCATIONS.map((loc) => (
+                    <div
+                      key={loc}
+                      onClick={() => toggleLocationSelection(loc)}
+                      className="p-2 rounded cursor-pointer text-sm flex items-center hover:bg-slate-50"
+                    >
+                      <div
+                        className={`w-4 h-4 border rounded mr-2 flex items-center justify-center ${
+                          selectedLocations.includes(loc)
+                            ? "bg-blue-600 border-blue-600"
+                            : "border-slate-300"
+                        }`}
+                      >
+                        {selectedLocations.includes(loc) && (
+                          <CheckSquare size={10} className="text-white" />
+                        )}
+                      </div>
+                      {loc}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-          <div className="flex items-center border rounded-lg px-3 bg-slate-50 ml-auto">
-            <Filter size={16} className="text-slate-400 mr-2" />
-            <select
-              value={filterLoc}
-              onChange={(e) => setFilterLoc(e.target.value)}
-              className="bg-transparent py-2 outline-none"
-            >
-              <option value="ALL">Show All in Table</option>
-              {LOCATIONS.map((l) => (
-                <option key={l} value={l}>
-                  {l}
-                </option>
-              ))}
-            </select>
-          </div>
+
+          <div className="h-px bg-slate-200 xl:w-px xl:h-auto xl:mx-2"></div>
+
+          {/* Export */}
           <button
             onClick={handleExport}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold flex items-center"
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold flex items-center text-sm"
           >
             <Download size={16} className="mr-2" /> CSV
           </button>
         </div>
+
+        {/* Stats Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-8">
           {LOCATIONS.map((loc) => {
-            if (filterLoc !== "ALL" && filterLoc !== loc) return null;
+            // Respect Filter Logic: If loc isn't in selected list (and list not empty), skip
+            if (
+              selectedLocations.length > 0 &&
+              !selectedLocations.includes(loc)
+            )
+              return null;
+
             const stat = storeStats[loc] || {
               waiting: 0,
               completed: 0,
               abandoned: 0,
             };
+
+            // Auto-Hide empty stores if showing "ALL" to save space, but show if explicitly selected
             if (
               stat.waiting === 0 &&
               stat.completed === 0 &&
               stat.abandoned === 0 &&
-              filterLoc === "ALL"
+              selectedLocations.length === 0
             )
               return null;
+
             return (
               <div
                 key={loc}
-                className="bg-white p-4 rounded-xl shadow-sm border border-slate-200"
+                className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 animate-in fade-in"
               >
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="font-bold text-lg text-slate-800">{loc}</h3>
@@ -993,7 +1136,7 @@ function AdminScreen({ isReady, onBack }) {
                       {formatNum(stat.completed)}
                     </div>
                     <div className="text-[10px] text-green-400 font-bold uppercase">
-                      Unique Check-Ins
+                      Done
                     </div>
                   </div>
                   <div className="bg-red-50 p-2 rounded-lg">
@@ -1009,6 +1152,8 @@ function AdminScreen({ isReady, onBack }) {
             );
           })}
         </div>
+
+        {/* Table */}
         <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
           <div className="p-4 bg-slate-50 border-b flex justify-between text-sm font-semibold text-slate-500">
             <span>Detailed Logs ({scans.length})</span>
@@ -1040,7 +1185,8 @@ function AdminScreen({ isReady, onBack }) {
                       const aliveUsers = scans.filter(
                         (u) =>
                           (u.status === "waiting" || u.status === "active") &&
-                          isUserAlive(u.lastActive)
+                          isUserAlive(u.lastActive) &&
+                          u.locationId === s.locationId // Rank within their location
                       );
                       const myRank = aliveUsers.findIndex((u) => u.id === s.id);
                       pos = myRank === 0 ? "NOW" : myRank + 1;
@@ -1125,7 +1271,6 @@ function AdminScreen({ isReady, onBack }) {
     </div>
   );
 }
-
 // --- SCREEN 4: SCANNER ---
 function ScannerScreen({ token, locationId, isReady, user }) {
   const [status, setStatus] = useState("idle");
