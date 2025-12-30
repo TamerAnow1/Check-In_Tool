@@ -103,7 +103,9 @@ const RESCAN_PENALTY_MS = 15 * 60 * 1000;
 const GEOFENCE_RADIUS_METERS = 100;
 const LOCATIONS_COORDS = {
   QCA5: { lat: 30.004567, lng: 31.422211 },
-  QCA4: { lat: 30.055537, lng: 30.9568635 }, // Added QCA4
+  QCA4: { lat: 30.055537, lng: 30.9568635 },
+  QCA3: { lat: 30.0600, lng: 31.3400 },     // Added QCA3 (Nasr City)
+  QCA2: { lat: 30.117660, lng: 31.355875 }, // Added QCA2
 };
 
 const COLLECTION_NAME = "checkins";
