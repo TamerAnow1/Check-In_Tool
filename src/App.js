@@ -659,10 +659,13 @@ function AdminScreen({ isReady, onBack }) {
   // --- FILTERS STATE ---
   const [selectedLocations, setSelectedLocations] = useState([]); // Empty array = ALL
   const [isLocDropdownOpen, setIsLocDropdownOpen] = useState(false); // UI Toggle
-  const [filterDate, setFilterDate] = useState(getTodayStr());
+
+  // CHANGED: Replaced single date/mode with Start and End dates
+  const [startDate, setStartDate] = useState(getTodayStr());
+  const [endDate, setEndDate] = useState(getTodayStr());
+
   const [startTime, setStartTime] = useState("00:00");
   const [endTime, setEndTime] = useState("23:59");
-  const [dateMode, setDateMode] = useState("DAY");
 
   const [isRefreshingKiosks, setIsRefreshingKiosks] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -716,18 +719,19 @@ function AdminScreen({ isReady, onBack }) {
   const applyFilters = (rawDocs) => {
     let data = rawDocs;
 
-    // 1. Date Filter
-    if (dateMode === "DAY") {
-      data = data.filter((d) => d.date === filterDate);
-    } else if (dateMode === "WEEK") {
-      const selectedStart = new Date(filterDate);
-      selectedStart.setHours(0, 0, 0, 0);
-      const selectedEnd = new Date(selectedStart);
-      selectedEnd.setDate(selectedEnd.getDate() + 7);
+    // 1. CHANGED: Date Range Filter
+    if (startDate && endDate) {
+      // Create Date objects (Start of day vs End of day)
+      const start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+
       data = data.filter((d) => {
-        if (!d.timestamp) return false;
+        if (!d.timestamp) return false; // Skip if no timestamp
         const scanTime = d.timestamp.toDate();
-        return scanTime >= selectedStart && scanTime < selectedEnd;
+        return scanTime >= start && scanTime <= end;
       });
     }
 
@@ -851,7 +855,7 @@ function AdminScreen({ isReady, onBack }) {
     a.href = window.URL.createObjectURL(
       new Blob([csvContent], { type: "text/csv" })
     );
-    a.download = `Report_${new Date().toISOString().split("T")[0]}.csv`;
+    a.download = `Report_${startDate}_to_${endDate}.csv`;
     a.click();
   };
 
@@ -881,11 +885,11 @@ function AdminScreen({ isReady, onBack }) {
     return () => unsubscribe();
   }, [
     isReady,
-    selectedLocations, // Updated dependency
-    startTime, // Updated dependency
-    endTime, // Updated dependency
-    filterDate,
-    dateMode,
+    selectedLocations,
+    startTime,
+    endTime,
+    startDate, // Updated dependency
+    endDate, // Updated dependency
     isAuthenticated,
     refreshTrigger,
   ]);
@@ -969,39 +973,34 @@ function AdminScreen({ isReady, onBack }) {
 
           {/* Filter Controls */}
           <div className="flex flex-wrap gap-2 items-center flex-1">
-            {/* Day/Week Toggle */}
-            <div className="flex items-center border rounded-lg overflow-hidden shrink-0">
-              <button
-                onClick={() => setDateMode("DAY")}
-                className={`px-3 py-2 text-xs font-bold ${
-                  dateMode === "DAY"
-                    ? "bg-blue-600 text-white"
-                    : "bg-slate-50 hover:bg-slate-100"
-                }`}
-              >
-                Day
-              </button>
-              <button
-                onClick={() => setDateMode("WEEK")}
-                className={`px-3 py-2 text-xs font-bold ${
-                  dateMode === "WEEK"
-                    ? "bg-blue-600 text-white"
-                    : "bg-slate-50 hover:bg-slate-100"
-                }`}
-              >
-                Week
-              </button>
-            </div>
-
-            {/* Date Picker */}
-            <div className="flex items-center border rounded-lg px-2 bg-slate-50">
-              <Calendar size={14} className="text-slate-400 mr-2" />
-              <input
-                type="date"
-                value={filterDate}
-                onChange={(e) => setFilterDate(e.target.value)}
-                className="bg-transparent py-2 outline-none text-sm w-32"
-              />
+            {/* CHANGED: Dual Date Picker (From - To) */}
+            <div className="flex items-center border rounded-lg px-2 bg-slate-50 gap-2">
+              <Calendar size={14} className="text-slate-400" />
+              <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
+                <div className="flex items-center">
+                  <span className="text-[10px] uppercase font-bold text-slate-400 mr-1">
+                    From
+                  </span>
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="bg-transparent py-2 outline-none text-sm w-32 font-medium"
+                  />
+                </div>
+                <span className="hidden sm:inline text-slate-300">|</span>
+                <div className="flex items-center">
+                  <span className="text-[10px] uppercase font-bold text-slate-400 mr-1">
+                    To
+                  </span>
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="bg-transparent py-2 outline-none text-sm w-32 font-medium"
+                  />
+                </div>
+              </div>
             </div>
 
             {/* Time Filter */}
