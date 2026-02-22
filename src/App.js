@@ -326,6 +326,19 @@ function MainApp() {
 // --- SCREEN 1: LANDING ---
 function LandingScreen({ onSelect }) {
   const [selectedLoc, setSelectedLoc] = useState("QCA1");
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const closeDropdown = (e) => {
+      if (!e.target.closest("#landing-loc-dropdown")) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener("click", closeDropdown);
+    return () => document.removeEventListener("click", closeDropdown);
+  }, []);
+
   return (
     <div className="flex flex-col items-center justify-center min-h-screen p-6 text-center space-y-8 bg-slate-50 animate-in fade-in duration-700">
       <div className="space-y-2">
@@ -349,18 +362,44 @@ function LandingScreen({ onSelect }) {
             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
               Select Location
             </label>
+
+            {/* --- NEW CUSTOM COLOR-CODED DROPDOWN --- */}
             <div className="flex gap-2 mt-1">
-              <select
-                value={selectedLoc}
-                onChange={(e) => setSelectedLoc(e.target.value)}
-                className="flex-1 p-2 border border-slate-300 rounded-lg bg-slate-50 focus:ring-2 focus:ring-blue-500 outline-none"
-              >
-                {LOCATIONS.map((loc) => (
-                  <option key={loc} value={loc}>
-                    {loc}
-                  </option>
-                ))}
-              </select>
+              <div className="relative flex-1" id="landing-loc-dropdown">
+                {/* The Visible Button */}
+                <div
+                  onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                  className={`w-full p-2 border border-slate-300 rounded-lg cursor-pointer flex justify-between items-center transition-colors ${getLocationColor(
+                    selectedLoc
+                  )}`}
+                >
+                  <span className="font-bold">{selectedLoc}</span>
+                  <span className="text-xs opacity-50">▼</span>
+                </div>
+
+                {/* The Dropdown List */}
+                {isDropdownOpen && (
+                  <div className="absolute top-full left-0 mt-1 w-full max-h-60 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-xl z-50 p-1">
+                    {LOCATIONS.map((loc) => (
+                      <div
+                        key={loc}
+                        onClick={() => {
+                          setSelectedLoc(loc);
+                          setIsDropdownOpen(false);
+                        }}
+                        className={`p-2 mb-1 rounded cursor-pointer text-sm font-medium transition-colors ${getLocationColor(
+                          loc
+                        )} ${
+                          selectedLoc === loc ? "ring-2 ring-slate-800" : ""
+                        }`}
+                      >
+                        {loc}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <button
                 onClick={() => onSelect("kiosk", selectedLoc)}
                 className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700"
@@ -368,6 +407,7 @@ function LandingScreen({ onSelect }) {
                 Launch
               </button>
             </div>
+            {/* --------------------------------------- */}
           </div>
         </div>
         <button
@@ -386,7 +426,6 @@ function LandingScreen({ onSelect }) {
     </div>
   );
 }
-
 // --- SCREEN 2: KIOSK ---
 function KioskScreen({ isReady, locationId }) {
   const [token, setToken] = useState("");
