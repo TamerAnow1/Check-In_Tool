@@ -100,12 +100,36 @@ const ABANDONMENT_LIMIT_MS = 40 * 60 * 1000;
 const RESCAN_PENALTY_MS = 15 * 60 * 1000;
 
 // --- GEO-FENCING CONFIG ---
-const GEOFENCE_RADIUS_METERS = 100;
+const GEOFENCE_RADIUS_METERS = 200;
+
 const LOCATIONS_COORDS = {
-  QCA5: { lat: 30.004567, lng: 31.422211 },
-  QCA4: { lat: 30.055537, lng: 30.9568635 },
-  QCA3: { lat: 30.06, lng: 31.34 }, // Added QCA3 (Nasr City)
-  QCA2: { lat: 30.11766, lng: 31.355875 }, // Added QCA2
+  QCA1: { lat: 30.043166, lng: 31.468879 },
+  QCA2: { lat: 30.11777, lng: 31.35576 },
+  QCA3: { lat: 30.083269, lng: 31.334888 },
+  QCA4: { lat: 30.054989, lng: 30.957067 },
+  QCA5: { lat: 30.004325, lng: 31.422559 },
+  QCA6: { lat: 29.961151, lng: 31.286674 },
+  QCA7: { lat: 30.050963, lng: 31.20661 },
+  QCA8: { lat: 30.150534, lng: 31.604949 },
+
+  QGA1: { lat: 30.05472, lng: 31.34365 },
+  QGA2: { lat: 30.05903, lng: 31.4942 },
+  QGA3: { lat: 30.2128, lng: 31.47489 },
+  QGA4: { lat: 29.968448, lng: 30.937903 },
+
+  QCC1: { lat: 30.0605, lng: 31.40844 },
+  QCC2: { lat: 30.0132757392, lng: 31.5177883952 },
+  QCC4: { lat: 30.013314, lng: 31.29382 },
+  QCC6: { lat: 30.10946, lng: 31.24688 },
+  QCC7: { lat: 29.99974, lng: 31.17724 },
+  QCC8: { lat: 30.29634409162722, lng: 31.745815026564205 },
+
+  QCD1: { lat: 31.2383, lng: 29.96255 },
+  QCD2: { lat: 31.21378, lng: 29.9443 },
+  QCD3: { lat: 29.981705, lng: 30.980283 },
+  QCD4: { lat: 29.957336, lng: 31.096139 },
+  QCD5: { lat: 29.928994, lng: 31.039205 },
+  QCD6: { lat: 29.99419, lng: 31.1436 },
 };
 
 const COLLECTION_NAME = "checkins";
@@ -114,7 +138,33 @@ const DEVICES_COLLECTION = "registered_devices";
 const SYSTEM_COLLECTION = "system";
 
 const TOKEN_VALIDITY_SECONDS = 30;
-const LOCATIONS = Array.from({ length: 30 }, (_, i) => `QCA${i + 1}`);
+
+const LOCATIONS = [
+  "QCA1",
+  "QCA2",
+  "QCA3",
+  "QCA4",
+  "QCA5",
+  "QCA6",
+  "QCA7",
+  "QCA8",
+  "QGA1",
+  "QGA2",
+  "QGA3",
+  "QGA4",
+  "QCC1",
+  "QCC2",
+  "QCC4",
+  "QCC6",
+  "QCC7",
+  "QCC8",
+  "QCD1",
+  "QCD2",
+  "QCD3",
+  "QCD4",
+  "QCD5",
+  "QCD6",
+];
 
 let app = null;
 let db = null;
@@ -134,7 +184,7 @@ const getTodayStr = () => {
 };
 
 const haversineDistance = (coords1, coords2) => {
-  if (!coords1 || !coords2) return 0;
+  if (!coords1 || !coords2 || !coords1.lat || !coords2.lat) return Infinity;
   const toRad = (x) => (x * Math.PI) / 180;
   const R = 6371e3;
   const dLat = toRad(coords2.lat - coords1.lat);
@@ -146,6 +196,18 @@ const haversineDistance = (coords1, coords2) => {
     Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
+};
+
+const getLocationColor = (loc) => {
+  if (loc.startsWith("QCA"))
+    return "bg-yellow-100 hover:bg-yellow-200 text-yellow-900";
+  if (loc.startsWith("QGA"))
+    return "bg-green-100 hover:bg-green-200 text-green-900";
+  if (loc.startsWith("QCC"))
+    return "bg-blue-100 hover:bg-blue-200 text-blue-900";
+  if (loc.startsWith("QCD"))
+    return "bg-purple-100 hover:bg-purple-200 text-purple-900";
+  return "bg-slate-50 hover:bg-slate-100 text-slate-700";
 };
 
 // Check if user is "Alive" based on heartbeat
@@ -1055,13 +1117,15 @@ function AdminScreen({ isReady, onBack }) {
                     <div
                       key={loc}
                       onClick={() => toggleLocationSelection(loc)}
-                      className="p-2 rounded cursor-pointer text-sm flex items-center hover:bg-slate-50"
+                      className={`p-2 mb-1 rounded cursor-pointer text-sm font-medium flex items-center transition-colors ${getLocationColor(
+                        loc
+                      )}`}
                     >
                       <div
                         className={`w-4 h-4 border rounded mr-2 flex items-center justify-center ${
                           selectedLocations.includes(loc)
-                            ? "bg-blue-600 border-blue-600"
-                            : "border-slate-300"
+                            ? "bg-slate-800 border-slate-800"
+                            : "border-slate-400/40 bg-white"
                         }`}
                       >
                         {selectedLocations.includes(loc) && (
