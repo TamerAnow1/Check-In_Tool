@@ -1600,7 +1600,29 @@ function ScannerScreen({ token, locationId, isReady, user }) {
 
   const saveCheckIn = async (coords) => {
     setStatus("saving");
+
+    // 1. GEOFENCE GUARD: Validate distance BEFORE database operations
+    const storeCoords = LOCATIONS_COORDS[locationId];
+    if (storeCoords) {
+      const dist = haversineDistance(
+        { lat: coords.latitude, lng: coords.longitude },
+        storeCoords
+      );
+
+      // Rejects user if outside 200m (using accuracy buffer to prevent false rejections)
+      if (dist - coords.accuracy > GEOFENCE_RADIUS_METERS) {
+        setStatus("error");
+        setErrorMsg(
+          `Location Error: You are ${Math.round(
+            dist
+          )}m away. You must be within ${GEOFENCE_RADIUS_METERS}m of the store to join the queue.`
+        );
+        return;
+      }
+    }
+
     try {
+      // 2. SEARCH FOR EXISTING TICKETS
       const deviceQ = query(
         collection(db, COLLECTION_NAME),
         where("deviceId", "==", deviceId),
@@ -1627,11 +1649,10 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         (v, i, a) => a.findIndex((v2) => v2.id === v.id) === i
       );
 
+      // 3. HANDLE RESUME / PENALTY LOGIC
       if (uniqueDocs.length > 0) {
         const bestTicket = uniqueDocs[0];
         const ticketData = bestTicket.data();
-
-        // Time Calculations
         const now = Date.now();
         const lastActiveTime = ticketData.lastActive
           ? ticketData.lastActive.toMillis()
@@ -1640,51 +1661,36 @@ function ScannerScreen({ token, locationId, isReady, user }) {
           ? ticketData.timestamp.toMillis()
           : 0;
         const ticketAge = now - ticketCreationTime;
-
-        // Check if this is a Page Refresh (Safe) or New Scan
         const isRefresh = ticketData.tokenUsed === token;
 
-        // RULE 1: HARD ABANDONMENT (> 40 mins inactive)
         if (now - lastActiveTime > ABANDONMENT_LIMIT_MS) {
           for (let docSnap of uniqueDocs) {
             await updateDoc(doc(db, COLLECTION_NAME, docSnap.id), {
               status: "abandoned",
             });
           }
-          // Fall through to create NEW ticket
-        }
-
-        // RULE 2: RESCAN PENALTY (< 15 mins old & New Scan)
-        else if (!isRefresh && ticketAge < RESCAN_PENALTY_MS) {
-          console.log(
-            "RESCAN PENALTY: User rescanned within 15 mins. Resetting."
-          );
+        } else if (!isRefresh && ticketAge < RESCAN_PENALTY_MS) {
           for (let docSnap of uniqueDocs) {
             await updateDoc(doc(db, COLLECTION_NAME, docSnap.id), {
               status: "abandoned",
             });
           }
-          // Fall through to create NEW ticket
-        }
-
-        // RULE 3: RESUME (Safe Refresh OR Old Ticket Rescan)
-        else {
+        } else {
           setMyQueueNumber(ticketData.queueNumber);
           setMyDocId(bestTicket.id);
           setTicketTime(ticketData.timestamp);
-
           if (!isRefresh) {
             await updateDoc(doc(db, COLLECTION_NAME, bestTicket.id), {
               tokenUsed: token,
               lastActive: serverTimestamp(),
             });
           }
-
           setStatus("success");
           return;
         }
       }
 
+      // 4. GENERATE NEW TICKET IN TRANSACTION
       const todayStr = getTodayStr();
       const newRef = doc(collection(db, COLLECTION_NAME));
       const nowTimestamp = serverTimestamp();
@@ -1693,8 +1699,9 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         const cRef = doc(db, COUNTER_COLLECTION, locationId);
         const cSnap = await t.get(cRef);
         let next = 1;
-        if (cSnap.exists() && cSnap.data().date === todayStr)
+        if (cSnap.exists() && cSnap.data().date === todayStr) {
           next = cSnap.data().count + 1;
+        }
         t.set(cRef, { date: todayStr, count: next, locationId });
         t.set(newRef, {
           userName: userEmail,
@@ -1711,6 +1718,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         });
         return next;
       });
+
       setMyQueueNumber(qNum);
       setMyDocId(newRef.id);
       setTicketTime({ toMillis: () => Date.now() });
@@ -1720,154 +1728,4 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       setErrorMsg("Check-in failed: " + e.message);
     }
   };
-
-  if (status === "success") {
-    if (statusFromDB === "abandoned")
-      return (
-        <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-red-50 text-center animate-in zoom-in">
-          <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-6 text-red-600">
-            <XCircle size={32} />
-          </div>
-          <h2 className="text-xl font-bold text-red-800 mb-2">
-            You Left the Area
-          </h2>
-          <p className="text-slate-600 mb-6">
-            You must stay near the store to keep your spot.
-          </p>
-          <button
-            onClick={() => window.location.reload()}
-            className="px-6 py-3 bg-red-600 text-white rounded-xl font-bold"
-          >
-            Start Over
-          </button>
-        </div>
-      );
-    if (isCheckedOut)
-      return (
-        <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-gray-100 text-center animate-in zoom-in">
-          <div className="w-16 h-16 bg-gray-200 rounded-full flex items-center justify-center mb-6 text-gray-500">
-            <LogOut size={32} />
-          </div>
-          <h2 className="text-xl font-bold text-gray-800 mb-2">
-            You have left the queue
-          </h2>
-          <button
-            onClick={() => window.location.reload()}
-            className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold"
-          >
-            New Check In
-          </button>
-        </div>
-      );
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-green-50 text-center animate-in zoom-in relative">
-        <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-6 text-green-600">
-          <CheckCircle size={32} />
-        </div>
-        <h2 className="text-xl font-bold text-green-800 mb-2">
-          Check-In Successful
-        </h2>
-        <div className="bg-white p-6 rounded-2xl shadow-lg border border-green-200 mt-4 mb-6 w-full max-w-xs">
-          <div className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-1">
-            {locationId} Ticket
-          </div>
-          <div className="text-6xl font-black text-slate-800">
-            #{formatNum(myQueueNumber)}
-          </div>
-          <div className="text-sm font-semibold text-blue-600 mt-2">
-            {userEmail}
-          </div>
-        </div>
-        <div className="w-full max-w-xs mb-8">
-          <div
-            className={`${
-              peopleAhead === 0 ? "bg-green-600" : "bg-blue-600"
-            } text-white p-4 rounded-xl shadow-md transition-colors`}
-          >
-            <div className="text-xs uppercase font-bold opacity-80 mb-1">
-              Users Remaining Before You
-            </div>
-            <div className="text-4xl font-bold">
-              {/* ✅ SAFE LOADING STATE */}
-              {peopleAhead === null ? (
-                <Loader className="animate-spin inline" />
-              ) : peopleAhead === 0 ? (
-                "It's your turn!"
-              ) : (
-                formatNum(peopleAhead)
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* DEBUG PANEL */}
-        {LOCATIONS_COORDS[locationId] && (
-          <div className="absolute bottom-4 left-4 right-4 bg-black/50 text-white p-2 rounded text-[10px] font-mono pointer-events-none">
-            DEBUG: Dist {debugDist}m (Limit {GEOFENCE_RADIUS_METERS}m) | Acc ±
-            {debugAcc}m
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-white p-6 flex flex-col items-center justify-center">
-      {showEmailModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
-          <div className="bg-white p-8 rounded-2xl max-w-sm w-full">
-            <div className="flex justify-center mb-4 text-blue-600">
-              <Mail size={40} />
-            </div>
-            <h3 className="text-xl font-bold mb-2 text-center">
-              Identity Check
-            </h3>
-            <form onSubmit={handleEmailSubmit}>
-              <input
-                type="email"
-                required
-                className="w-full px-4 py-3 border rounded-xl mb-4"
-                placeholder="Email"
-                value={emailInput}
-                onChange={(e) => setEmailInput(e.target.value)}
-              />
-              <button
-                type="submit"
-                disabled={isRecovering}
-                className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold"
-              >
-                {isRecovering ? "Verifying..." : "Continue"}
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-      {showPermissionModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-          <div className="bg-white p-6 rounded-2xl max-w-sm w-full">
-            <h3 className="text-lg font-bold mb-2">
-              Check in at {locationId}?
-            </h3>
-            <button
-              onClick={confirmAndCheckIn}
-              className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold"
-            >
-              Allow & Check In
-            </button>
-          </div>
-        </div>
-      )}
-      <div className="text-center">
-        {status !== "idle" && (
-          <Loader className="animate-spin mx-auto mb-4 text-blue-500" />
-        )}
-        <p className="text-slate-500">
-          {status === "idle" || status === "initializing"
-            ? "Verifying..."
-            : "Saving..."}
-        </p>
-        {errorMsg && <p className="text-red-500 mt-2">{errorMsg}</p>}
-      </div>
-    </div>
-  );
 }
