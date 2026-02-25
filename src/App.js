@@ -103,7 +103,7 @@ const RESCAN_PENALTY_MS = 15 * 60 * 1000;
 const GEOFENCE_RADIUS_METERS = 200;
 
 const LOCATIONS_COORDS = {
-  QCA1: { lat: 30.043166, lng: 31.468879 },
+  QCA1: { lat: 30.045325, lng: 31.467408 },
   QCA2: { lat: 30.11777, lng: 31.35576 },
   QCA3: { lat: 30.083269, lng: 31.334888 },
   QCA4: { lat: 30.054989, lng: 30.957067 },
