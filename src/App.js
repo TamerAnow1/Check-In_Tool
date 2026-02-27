@@ -75,7 +75,7 @@ class ErrorBoundary extends React.Component {
 
 // --- CONFIGURATION ---
 const firebaseConfig = {
-  apiKey: "AIzaSyD8eWUJQD8_LS8Be0seSpIRovBMzV-chO8",
+  apiKey: "AIzaSyBmvJ7Gc7CMbWoxcrGvPub_rI6g_nUEDyc",
   authDomain: "qr-code-generator-46179.firebaseapp.com",
   projectId: "qr-code-generator-46179",
   storageBucket: "qr-code-generator-46179.firebasestorage.app",
