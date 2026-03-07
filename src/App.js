@@ -1471,7 +1471,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         (err) => console.warn("Poll Error:", err),
         { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
       );
-    }, 5000);
+    }, 80000);
 
     return () => {
       navigator.geolocation.clearWatch(watchId);
