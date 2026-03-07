@@ -473,7 +473,7 @@ function KioskScreen({ isReady, locationId }) {
           }
         }
       });
-    }, 60000);
+    }, 1800000);
 
     return () => clearInterval(cleanupInterval);
   }, [isReady, locationId]);
