@@ -451,7 +451,8 @@ function KioskScreen({ isReady, locationId }) {
       const q = query(
         collection(db, COLLECTION_NAME),
         where("locationId", "==", locationId),
-        where("status", "in", ["waiting", "active"])
+        where("status", "in", ["waiting", "active"]),
+        where("date", "==", getTodayStr()) // <--- NEW FIX
       );
 
       const snapshot = await getDocs(q);
@@ -602,9 +603,11 @@ function KioskScreen({ isReady, locationId }) {
 
   useEffect(() => {
     if (!isReady || !db) return;
+
     const safeQ = query(
       collection(db, COLLECTION_NAME),
-      where("locationId", "==", locationId)
+      where("locationId", "==", locationId),
+      where("date", "==", getTodayStr()) // <--- NEW FIX
     );
 
     const unsubscribe = onSnapshot(safeQ, (snapshot) => {
@@ -916,7 +919,12 @@ function AdminScreen({ isReady, onBack }) {
 
   const handleExport = async () => {
     if (!isReady || !db) return;
-    const q = query(collection(db, COLLECTION_NAME));
+
+    const q = query(
+      collection(db, COLLECTION_NAME),
+      where("date", ">=", startDate),
+      where("date", "<=", endDate) // <--- NEW FIX
+    );
     const snapshot = await getDocs(q);
     let data = snapshot.docs.map((doc) => doc.data());
 
@@ -962,7 +970,13 @@ function AdminScreen({ isReady, onBack }) {
 
   useEffect(() => {
     if (!isReady || !db || !isAuthenticated) return;
-    const q = query(collection(db, COLLECTION_NAME));
+
+    const q = query(
+      collection(db, COLLECTION_NAME),
+      where("date", ">=", startDate),
+      where("date", "<=", endDate) // <--- NEW FIX
+    );
+
     const unsubscribe = onSnapshot(q, (snapshot) => {
       let rawData = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
 
@@ -1487,7 +1501,8 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       const q = query(
         collection(db, COLLECTION_NAME),
         where("locationId", "==", locationId),
-        where("status", "in", ["waiting", "active"])
+        where("status", "in", ["waiting", "active"]),
+        where("date", "==", getTodayStr()) // <--- NEW FIX
       );
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const todayStr = getTodayStr();
