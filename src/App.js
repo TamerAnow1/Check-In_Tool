@@ -14,6 +14,7 @@ import {
   getDoc,
   updateDoc,
   limit,
+  getCountFromServer, // <--- NEW IMPORT ADDED HERE
 } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 import {
@@ -1489,7 +1490,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     }
   }, [peopleAhead, status, isCheckedOut]);
 
-  // ✅ CRITICAL: PEOPLE AHEAD CALCULATION WITH HEARTBEAT
+  // ✅ CRITICAL FIX: PEOPLE AHEAD CALCULATION (Quota Saver)
   useEffect(() => {
     if (
       status === "success" &&
@@ -1498,36 +1499,31 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       isReady &&
       db
     ) {
-      const q = query(
-        collection(db, COLLECTION_NAME),
-        where("locationId", "==", locationId),
-        where("status", "in", ["waiting", "active"]),
-        where("date", "==", getTodayStr()) // <--- NEW FIX
-      );
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const todayStr = getTodayStr();
+      const checkQueueCount = async () => {
+        try {
+          // Tell Firebase to count people ahead of me, instead of downloading them
+          const q = query(
+            collection(db, COLLECTION_NAME),
+            where("locationId", "==", locationId),
+            where("status", "in", ["waiting", "active"]),
+            where("date", "==", getTodayStr()),
+            where("queueNumber", "<", myQueueNumber) // Only count smaller queue numbers!
+          );
 
-        // 1. Get ONLY ALIVE users
-        const activeUsers = snapshot.docs
-          .map((d) => ({ ...d.data(), id: d.id }))
-          .filter((u) => {
-            return u.date === todayStr && isUserAlive(u.lastActive);
-          })
-          .sort((a, b) => Number(a.queueNumber) - Number(b.queueNumber));
-
-        // 3. Find index
-        const myIndex = activeUsers.findIndex(
-          (u) => Number(u.queueNumber) === Number(myQueueNumber)
-        );
-
-        // 4. Update
-        if (myIndex === -1) {
-          setPeopleAhead(null);
-        } else {
-          setPeopleAhead(myIndex);
+          const snapshot = await getCountFromServer(q);
+          setPeopleAhead(snapshot.data().count);
+        } catch (e) {
+          console.warn("Count error", e);
         }
-      });
-      return () => unsubscribe();
+      };
+
+      // Run immediately when the user checks in
+      checkQueueCount();
+
+      // Check the line quietly every 60 seconds (Costs exactly 1 Read per minute)
+      const countInterval = setInterval(checkQueueCount, 90000);
+
+      return () => clearInterval(countInterval);
     }
   }, [status, myQueueNumber, isCheckedOut, locationId, isReady]);
 
