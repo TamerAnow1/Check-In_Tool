@@ -1248,24 +1248,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     try {
       const todayStr = getTodayStr();
 
-      // Check if user ALREADY got a ticket today at this location to prevent spam
-      const existingQ = query(
-        collection(db, COLLECTION_NAME),
-        where("deviceId", "==", deviceId),
-        where("locationId", "==", locationId),
-        where("date", "==", todayStr)
-      );
-
-      const existingSnap = await getDocs(existingQ);
-
-      if (!existingSnap.empty) {
-        // User already has a ticket for today. Just show them their existing number.
-        const existingTicket = existingSnap.docs[0].data();
-        setMyQueueNumber(existingTicket.queueNumber);
-        setStatus("success");
-        return;
-      }
-
       // Generate NEW Ticket using Atomic Transaction
       const newRef = doc(collection(db, COLLECTION_NAME));
       const nowTimestamp = serverTimestamp();
