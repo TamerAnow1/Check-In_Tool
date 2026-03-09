@@ -12,9 +12,8 @@ import {
   doc,
   setDoc,
   getDoc,
-  updateDoc,
+  orderBy,
   limit,
-  getCountFromServer, // <--- NEW IMPORT ADDED HERE
 } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 import {
@@ -27,18 +26,12 @@ import {
   LayoutDashboard,
   Filter,
   Calendar,
-  Lock,
+  Clock,
   Mail,
   RefreshCw,
   Zap,
-  LogOut,
   Maximize,
-  Clock,
-  Smartphone,
-  Users,
   CheckSquare,
-  XCircle,
-  WifiOff,
 } from "lucide-react";
 
 // --- ERROR BOUNDARY ---
@@ -84,21 +77,6 @@ const firebaseConfig = {
   appId: "1:817618481036:web:4585bf8713719410e9f0a9",
   measurementId: "G-7Y6QXQMYNC",
 };
-
-// --- SETTINGS ---
-const TEST_MODE = false;
-const POPUP_COUNTDOWN_SEC = 15;
-
-// HEARTBEAT LOGIC (Visual Only - Determines if they show as 'Away')
-const HEARTBEAT_LIMIT_MS = 3 * 60 * 1000;
-
-// HARD RESET TIMEOUT (40 Minutes)
-// If user scans QR and hasn't been seen for 40 mins, force NEW ticket.
-const ABANDONMENT_LIMIT_MS = 40 * 60 * 1000;
-
-// RESCAN PENALTY (15 Minutes)
-// If user scans a NEW QR code within 15 mins of their last ticket, reset them.
-const RESCAN_PENALTY_MS = 15 * 60 * 1000;
 
 // --- GEO-FENCING CONFIG ---
 const GEOFENCE_RADIUS_METERS = 200;
@@ -174,7 +152,10 @@ let auth = null;
 // --- HELPERS ---
 const formatNum = (n) => (n !== undefined && n !== null ? n.toString() : "");
 const formatDate = (d) => (d ? d.toLocaleDateString("en-US") : "");
-const formatTime = (d) => (d ? d.toLocaleTimeString("en-US") : "");
+const formatTime = (d) =>
+  d
+    ? d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
+    : "";
 
 const getTodayStr = () => {
   const d = new Date();
@@ -209,13 +190,6 @@ const getLocationColor = (loc) => {
   if (loc.startsWith("QCD"))
     return "bg-purple-100 hover:bg-purple-200 text-purple-900";
   return "bg-slate-50 hover:bg-slate-100 text-slate-700";
-};
-
-// Check if user is "Alive" based on heartbeat
-const isUserAlive = (lastActiveTimestamp) => {
-  if (!lastActiveTimestamp) return false;
-  const diff = Date.now() - lastActiveTimestamp.toMillis();
-  return diff < HEARTBEAT_LIMIT_MS;
 };
 
 export default function App() {
@@ -329,7 +303,6 @@ function LandingScreen({ onSelect }) {
   const [selectedLoc, setSelectedLoc] = useState("QCA1");
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
-  // Close dropdown when clicking outside
   useEffect(() => {
     const closeDropdown = (e) => {
       if (!e.target.closest("#landing-loc-dropdown")) {
@@ -363,11 +336,8 @@ function LandingScreen({ onSelect }) {
             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
               Select Location
             </label>
-
-            {/* --- NEW CUSTOM COLOR-CODED DROPDOWN --- */}
             <div className="flex gap-2 mt-1">
               <div className="relative flex-1" id="landing-loc-dropdown">
-                {/* The Visible Button */}
                 <div
                   onClick={() => setIsDropdownOpen(!isDropdownOpen)}
                   className={`w-full p-2 border border-slate-300 rounded-lg cursor-pointer flex justify-between items-center transition-colors ${getLocationColor(
@@ -377,8 +347,6 @@ function LandingScreen({ onSelect }) {
                   <span className="font-bold">{selectedLoc}</span>
                   <span className="text-xs opacity-50">▼</span>
                 </div>
-
-                {/* The Dropdown List */}
                 {isDropdownOpen && (
                   <div className="absolute top-full left-0 mt-1 w-full max-h-60 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-xl z-50 p-1">
                     {LOCATIONS.map((loc) => (
@@ -400,7 +368,6 @@ function LandingScreen({ onSelect }) {
                   </div>
                 )}
               </div>
-
               <button
                 onClick={() => onSelect("kiosk", selectedLoc)}
                 className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700"
@@ -408,7 +375,6 @@ function LandingScreen({ onSelect }) {
                 Launch
               </button>
             </div>
-            {/* --------------------------------------- */}
           </div>
         </div>
         <button
@@ -427,6 +393,7 @@ function LandingScreen({ onSelect }) {
     </div>
   );
 }
+
 // --- SCREEN 2: KIOSK ---
 function KioskScreen({ isReady, locationId }) {
   const [token, setToken] = useState("");
@@ -437,47 +404,6 @@ function KioskScreen({ isReady, locationId }) {
   const [isDownloading, setIsDownloading] = useState(false);
   const [wakeLockActive, setWakeLockActive] = useState(false);
   const lastSignalRef = useRef(null);
-
-  const scansRef = useRef(recentScans);
-  useEffect(() => {
-    scansRef.current = recentScans;
-  }, [recentScans]);
-
-  useEffect(() => {
-    if (!isReady || !db) return;
-
-    // AUTOMATED CLEANUP (Every 60s)
-    const cleanupInterval = setInterval(async () => {
-      const now = Date.now();
-      const q = query(
-        collection(db, COLLECTION_NAME),
-        where("locationId", "==", locationId),
-        where("status", "in", ["waiting", "active"]),
-        where("date", "==", getTodayStr()) // <--- NEW FIX
-      );
-
-      const snapshot = await getDocs(q);
-
-      snapshot.docs.forEach(async (docSnap) => {
-        const d = docSnap.data();
-        const lastActive =
-          d.lastActive?.toMillis() || d.timestamp?.toMillis() || 0;
-
-        // Auto-Abandon after 40 mins
-        if (now - lastActive > ABANDONMENT_LIMIT_MS) {
-          try {
-            await updateDoc(doc(db, COLLECTION_NAME, docSnap.id), {
-              status: "abandoned",
-            });
-          } catch (e) {
-            console.error(e);
-          }
-        }
-      });
-    }, 1800000);
-
-    return () => clearInterval(cleanupInterval);
-  }, [isReady, locationId]);
 
   const toggleFullScreen = () => {
     if (!document.fullscreenElement)
@@ -546,10 +472,9 @@ function KioskScreen({ isReady, locationId }) {
         (a, b) =>
           (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
       );
+
       const csvContent = [
-        ["Queue Number", "Name", "Date", "Time", "Device ID", "Status"].join(
-          ","
-        ),
+        ["Ticket Number", "Name", "Date", "Time", "Device ID"].join(","),
         ...data.map((d) => {
           const dt = d.timestamp ? d.timestamp.toDate() : new Date();
           return [
@@ -558,10 +483,10 @@ function KioskScreen({ isReady, locationId }) {
             formatDate(dt),
             formatTime(dt),
             `"${d.deviceId}"`,
-            d.status || "N/A",
           ].join(",");
         }),
       ].join("\n");
+
       const blob = new Blob([csvContent], { type: "text/csv" });
       const a = document.createElement("a");
       a.href = window.URL.createObjectURL(blob);
@@ -605,28 +530,23 @@ function KioskScreen({ isReady, locationId }) {
   useEffect(() => {
     if (!isReady || !db) return;
 
+    // Get today's recent scans for this location
     const safeQ = query(
       collection(db, COLLECTION_NAME),
       where("locationId", "==", locationId),
-      where("date", "==", getTodayStr()) // <--- NEW FIX
+      where("date", "==", getTodayStr())
     );
 
     const unsubscribe = onSnapshot(safeQ, (snapshot) => {
-      const todayStr = getTodayStr();
-      const allScans = snapshot.docs
-        .map((doc) => ({ id: doc.id, ...doc.data() }))
-        .filter((u) => {
-          const isActive = u.status === "waiting" || u.status === "active";
-          const isToday = u.date === todayStr;
-          const isAlive = isUserAlive(u.lastActive);
-          return isActive && isToday && isAlive;
-        });
-
+      const allScans = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
       allScans.sort(
         (a, b) =>
           (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
       );
-      setRecentScans(allScans.slice(0, 5));
+      setRecentScans(allScans.slice(0, 6)); // Display last 6 tickets
     });
     return () => unsubscribe();
   }, [isReady, locationId]);
@@ -653,7 +573,7 @@ function KioskScreen({ isReady, locationId }) {
           <Maximize size={20} />
         </button>
         <h2 className="text-3xl font-bold mb-10 tracking-wider">
-          SCAN TO CHECK IN
+          SCAN FOR TICKET
         </h2>
         {!isUrlValid && (
           <div className="absolute top-24 left-1/2 -translate-x-1/2 bg-yellow-500/20 border border-yellow-500 text-yellow-100 p-3 rounded-lg text-sm flex items-start gap-2 text-left">
@@ -689,7 +609,7 @@ function KioskScreen({ isReady, locationId }) {
         <div className="flex items-center justify-between mb-8">
           <h3 className="text-2xl font-bold flex items-center">
             <div className="w-3 h-3 bg-green-500 rounded-full mr-3 animate-pulse"></div>
-            {locationId} Feed
+            Recent Tickets
           </h3>
           <div className="flex gap-2">
             {wakeLockActive && (
@@ -756,26 +676,20 @@ function AdminScreen({ isReady, onBack }) {
   const [passwordInput, setPasswordInput] = useState("");
   const [authError, setAuthError] = useState("");
 
-  // Data State
   const [scans, setScans] = useState([]);
   const [storeStats, setStoreStats] = useState({});
-  const [activeTurnMap, setActiveTurnMap] = useState({});
 
-  // --- FILTERS STATE ---
-  const [selectedLocations, setSelectedLocations] = useState([]); // Empty array = ALL
-  const [isLocDropdownOpen, setIsLocDropdownOpen] = useState(false); // UI Toggle
+  const [selectedLocations, setSelectedLocations] = useState([]);
+  const [isLocDropdownOpen, setIsLocDropdownOpen] = useState(false);
 
-  // CHANGED: Replaced single date/mode with Start and End dates
   const [startDate, setStartDate] = useState(getTodayStr());
   const [endDate, setEndDate] = useState(getTodayStr());
-
   const [startTime, setStartTime] = useState("00:00");
   const [endTime, setEndTime] = useState("23:59");
 
   const [isRefreshingKiosks, setIsRefreshingKiosks] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
-  // Close dropdown when clicking outside
   useEffect(() => {
     const closeDropdown = (e) => {
       if (!e.target.closest("#loc-dropdown-container")) {
@@ -809,52 +723,33 @@ function AdminScreen({ isReady, onBack }) {
     }
   };
 
-  const handleKickUser = async (userDocId) => {
-    if (!db || !window.confirm("Kick user from queue?")) return;
-    try {
-      await updateDoc(doc(db, COLLECTION_NAME, userDocId), {
-        status: "abandoned",
-      });
-    } catch (e) {
-      alert("Failed to kick user.");
-    }
-  };
-
-  // --- FILTER LOGIC ---
   const applyFilters = (rawDocs) => {
     let data = rawDocs;
 
-    // 1. CHANGED: Date Range Filter
     if (startDate && endDate) {
-      // Create Date objects (Start of day vs End of day)
       const start = new Date(startDate);
       start.setHours(0, 0, 0, 0);
-
       const end = new Date(endDate);
       end.setHours(23, 59, 59, 999);
 
       data = data.filter((d) => {
-        if (!d.timestamp) return false; // Skip if no timestamp
+        if (!d.timestamp) return false;
         const scanTime = d.timestamp.toDate();
         return scanTime >= start && scanTime <= end;
       });
     }
 
-    // 2. Time Filter
     data = data.filter((d) => {
       if (!d.timestamp) return false;
       const dt = d.timestamp.toDate();
       const docMinutes = dt.getHours() * 60 + dt.getMinutes();
-
       const [startH, startM] = startTime.split(":").map(Number);
       const [endH, endM] = endTime.split(":").map(Number);
       const startMinutes = startH * 60 + startM;
       const endMinutes = endH * 60 + endM;
-
       return docMinutes >= startMinutes && docMinutes <= endMinutes;
     });
 
-    // 3. Location Filter (Multi-Select)
     if (selectedLocations.length > 0) {
       data = data.filter((d) => selectedLocations.includes(d.locationId));
     }
@@ -868,54 +763,17 @@ function AdminScreen({ isReady, onBack }) {
     );
   };
 
-  const calculateTurns = (filteredData) => {
-    const nowServingMap = {};
-    LOCATIONS.forEach((loc) => {
-      const locUsers = filteredData.filter(
-        (d) =>
-          d.locationId === loc &&
-          (d.status === "waiting" || d.status === "active") &&
-          isUserAlive(d.lastActive)
-      );
-      locUsers.sort((a, b) => Number(a.queueNumber) - Number(b.queueNumber));
-      if (locUsers.length > 0) {
-        nowServingMap[loc] = Number(locUsers[0].queueNumber);
-      }
-    });
-    setActiveTurnMap(nowServingMap);
-  };
-
   const calculateStoreStats = (filteredData) => {
     const stats = {};
-    // Initialize for ALL locations so grid shows zeros even if filtered out
     LOCATIONS.forEach((loc) => {
-      stats[loc] = { waiting: 0, unique_all: new Set(), abandoned: new Set() };
+      stats[loc] = { total: 0 };
     });
-
     filteredData.forEach((d) => {
-      // Safety check if location exists in our config
       if (stats[d.locationId]) {
-        const uniqueId = d.userName || d.deviceId || "unknown";
-        stats[d.locationId].unique_all.add(uniqueId);
-        if (
-          (d.status === "waiting" || d.status === "active") &&
-          isUserAlive(d.lastActive)
-        ) {
-          stats[d.locationId].waiting++;
-        } else if (d.status === "abandoned")
-          stats[d.locationId].abandoned.add(uniqueId);
+        stats[d.locationId].total++;
       }
     });
-
-    const finalStats = {};
-    LOCATIONS.forEach((loc) => {
-      finalStats[loc] = {
-        waiting: stats[loc].waiting,
-        completed: stats[loc].unique_all.size,
-        abandoned: stats[loc].abandoned.size,
-      };
-    });
-    setStoreStats(finalStats);
+    setStoreStats(stats);
   };
 
   const handleExport = async () => {
@@ -924,28 +782,27 @@ function AdminScreen({ isReady, onBack }) {
     const q = query(
       collection(db, COLLECTION_NAME),
       where("date", ">=", startDate),
-      where("date", "<=", endDate) // <--- NEW FIX
+      where("date", "<=", endDate)
     );
     const snapshot = await getDocs(q);
     let data = snapshot.docs.map((doc) => doc.data());
 
-    // Apply all active filters
     data = applyFilters(data);
-
     data.sort(
       (a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
     );
+
     const csvHeader = [
       "Location",
-      "Queue Number",
+      "Ticket Number",
       "Name",
       "Date",
       "Time",
       "Device ID",
-      "Status",
       "Latitude",
       "Longitude",
     ].join(",");
+
     const csvRows = data.map((d) => {
       const dateObj = d.timestamp ? d.timestamp.toDate() : null;
       return [
@@ -955,11 +812,11 @@ function AdminScreen({ isReady, onBack }) {
         `"${formatDate(dateObj)}"`,
         `"${formatTime(dateObj)}"`,
         `"${d.deviceId || ""}"`,
-        d.status || "waiting",
         d.location?.lat || "",
         d.location?.lng || "",
       ].join(",");
     });
+
     const csvContent = [csvHeader, ...csvRows].join("\n");
     const a = document.createElement("a");
     a.href = window.URL.createObjectURL(
@@ -975,28 +832,22 @@ function AdminScreen({ isReady, onBack }) {
     const q = query(
       collection(db, COLLECTION_NAME),
       where("date", ">=", startDate),
-      where("date", "<=", endDate) // <--- NEW FIX
+      where("date", "<=", endDate)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       let rawData = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-
       const filteredData = applyFilters(rawData);
 
-      calculateTurns(filteredData);
       calculateStoreStats(filteredData);
 
-      const activeQueue = filteredData
-        .filter((u) => u.status === "waiting" || u.status === "active")
-        .sort((a, b) => Number(a.queueNumber) - Number(b.queueNumber));
-      const history = filteredData
-        .filter((u) => u.status !== "waiting" && u.status !== "active")
-        .sort(
-          (a, b) =>
-            (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
-        );
+      // Simple sort by newest first
+      filteredData.sort(
+        (a, b) =>
+          (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
+      );
 
-      setScans([...activeQueue, ...history]);
+      setScans(filteredData);
     });
     return () => unsubscribe();
   }, [
@@ -1004,8 +855,8 @@ function AdminScreen({ isReady, onBack }) {
     selectedLocations,
     startTime,
     endTime,
-    startDate, // Updated dependency
-    endDate, // Updated dependency
+    startDate,
+    endDate,
     isAuthenticated,
     refreshTrigger,
   ]);
@@ -1063,7 +914,6 @@ function AdminScreen({ isReady, onBack }) {
 
         {/* Toolbar */}
         <div className="flex flex-col xl:flex-row gap-4 mb-8 bg-white p-4 rounded-xl shadow-sm">
-          {/* Action Buttons */}
           <div className="flex gap-2">
             <button
               onClick={handleRemoteRefresh}
@@ -1087,9 +937,8 @@ function AdminScreen({ isReady, onBack }) {
 
           <div className="h-px bg-slate-200 xl:w-px xl:h-auto xl:mx-2"></div>
 
-          {/* Filter Controls */}
+          {/* Filters */}
           <div className="flex flex-wrap gap-2 items-center flex-1">
-            {/* CHANGED: Dual Date Picker (From - To) */}
             <div className="flex items-center border rounded-lg px-2 bg-slate-50 gap-2">
               <Calendar size={14} className="text-slate-400" />
               <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
@@ -1119,7 +968,6 @@ function AdminScreen({ isReady, onBack }) {
               </div>
             </div>
 
-            {/* Time Filter */}
             <div className="flex items-center border rounded-lg px-2 bg-slate-50">
               <Clock size={14} className="text-slate-400 mr-2" />
               <input
@@ -1137,7 +985,6 @@ function AdminScreen({ isReady, onBack }) {
               />
             </div>
 
-            {/* Multi-Location Dropdown */}
             <div className="relative" id="loc-dropdown-container">
               <button
                 onClick={() => setIsLocDropdownOpen(!isLocDropdownOpen)}
@@ -1148,7 +995,6 @@ function AdminScreen({ isReady, onBack }) {
                   ? "All Stores"
                   : `${selectedLocations.length} Selected`}
               </button>
-
               {isLocDropdownOpen && (
                 <div className="absolute top-full left-0 mt-2 w-48 max-h-60 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-xl z-50 p-2">
                   <div
@@ -1195,8 +1041,6 @@ function AdminScreen({ isReady, onBack }) {
           </div>
 
           <div className="h-px bg-slate-200 xl:w-px xl:h-auto xl:mx-2"></div>
-
-          {/* Export */}
           <button
             onClick={handleExport}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold flex items-center text-sm"
@@ -1206,64 +1050,30 @@ function AdminScreen({ isReady, onBack }) {
         </div>
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-8">
           {LOCATIONS.map((loc) => {
-            // Respect Filter Logic: If loc isn't in selected list (and list not empty), skip
             if (
               selectedLocations.length > 0 &&
               !selectedLocations.includes(loc)
             )
               return null;
-
-            const stat = storeStats[loc] || {
-              waiting: 0,
-              completed: 0,
-              abandoned: 0,
-            };
-
-            // Auto-Hide empty stores if showing "ALL" to save space, but show if explicitly selected
-            if (
-              stat.waiting === 0 &&
-              stat.completed === 0 &&
-              stat.abandoned === 0 &&
-              selectedLocations.length === 0
-            )
-              return null;
+            const stat = storeStats[loc] || { total: 0 };
+            if (stat.total === 0 && selectedLocations.length === 0) return null;
 
             return (
               <div
                 key={loc}
-                className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 animate-in fade-in"
+                className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 animate-in fade-in flex flex-col items-center justify-center"
               >
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-bold text-lg text-slate-800">{loc}</h3>
-                  <Building size={16} className="text-slate-400" />
+                <div className="flex items-center justify-between w-full mb-2">
+                  <h3 className="font-bold text-sm text-slate-800">{loc}</h3>
+                  <Building size={14} className="text-slate-400" />
                 </div>
-                <div className="grid grid-cols-3 gap-2 text-center">
-                  <div className="bg-blue-50 p-2 rounded-lg">
-                    <div className="text-blue-600 font-bold text-xl">
-                      {formatNum(stat.waiting)}
-                    </div>
-                    <div className="text-[10px] text-blue-400 font-bold uppercase">
-                      Wait
-                    </div>
-                  </div>
-                  <div className="bg-green-50 p-2 rounded-lg">
-                    <div className="text-green-600 font-bold text-xl">
-                      {formatNum(stat.completed)}
-                    </div>
-                    <div className="text-[10px] text-green-400 font-bold uppercase">
-                      Done
-                    </div>
-                  </div>
-                  <div className="bg-red-50 p-2 rounded-lg">
-                    <div className="text-red-600 font-bold text-xl">
-                      {formatNum(stat.abandoned)}
-                    </div>
-                    <div className="text-[10px] text-red-400 font-bold uppercase">
-                      Lost
-                    </div>
-                  </div>
+                <div className="text-3xl font-black text-blue-600">
+                  {formatNum(stat.total)}
+                </div>
+                <div className="text-[10px] text-slate-400 font-bold uppercase mt-1">
+                  Total Tickets
                 </div>
               </div>
             );
@@ -1279,107 +1089,29 @@ function AdminScreen({ isReady, onBack }) {
             <table className="w-full text-left">
               <thead className="bg-slate-50 border-b">
                 <tr>
-                  <th className="px-6 py-4">Pos</th>
-                  <th className="px-6 py-4">Loc</th>
-                  <th className="px-6 py-4">#</th>
+                  <th className="px-6 py-4">Location</th>
+                  <th className="px-6 py-4">Ticket #</th>
                   <th className="px-6 py-4">User</th>
                   <th className="px-6 py-4">Time</th>
-                  <th className="px-6 py-4">Status</th>
-                  <th className="px-6 py-4">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {scans.map((s, index) => {
-                  const isWaiting =
-                    s.status === "waiting" || s.status === "active";
-                  const isAlive = isUserAlive(s.lastActive);
-
-                  let pos = "-";
-                  let awayMins = 0;
-
-                  if (isWaiting) {
-                    if (isAlive) {
-                      const aliveUsers = scans.filter(
-                        (u) =>
-                          (u.status === "waiting" || u.status === "active") &&
-                          isUserAlive(u.lastActive) &&
-                          u.locationId === s.locationId // Rank within their location
-                      );
-                      const myRank = aliveUsers.findIndex((u) => u.id === s.id);
-                      pos = myRank === 0 ? "NOW" : myRank + 1;
-                    } else {
-                      pos = "Away";
-                      if (s.lastActive) {
-                        const diff = Date.now() - s.lastActive.toMillis();
-                        awayMins = Math.floor(diff / 60000);
-                      }
-                    }
-                  }
-
-                  return (
-                    <tr
-                      key={s.id}
-                      className={`hover:bg-slate-50 ${
-                        !isAlive && isWaiting ? "opacity-50 bg-slate-100" : ""
-                      }`}
-                    >
-                      <td className="px-6 py-4 font-bold text-blue-600">
-                        {pos === "NOW" ? (
-                          <div className="flex items-center px-2 py-1 bg-green-100 text-green-700 text-[10px] font-bold rounded-full w-fit animate-pulse whitespace-nowrap">
-                            <CheckCircle size={12} className="mr-1" /> NOW
-                          </div>
-                        ) : pos === "Away" ? (
-                          <div className="flex flex-col">
-                            <div className="flex items-center text-slate-400 text-xs font-bold">
-                              <WifiOff size={12} className="mr-1" /> AWAY
-                            </div>
-                            <div className="text-[10px] text-red-400 font-medium">
-                              {awayMins}m ago
-                            </div>
-                          </div>
-                        ) : (
-                          pos
-                        )}
-                      </td>
-                      <td className="px-6 py-4">{s.locationId}</td>
-                      <td className="px-6 py-4 font-bold">
-                        #{formatNum(s.queueNumber)}
-                      </td>
-                      <td className="px-6 py-4">{s.userName}</td>
-                      <td className="px-6 py-4 text-sm text-slate-500">
-                        {s.timestamp
-                          ? `${formatDate(s.timestamp.toDate())} ${formatTime(
-                              s.timestamp.toDate()
-                            )}`
-                          : ""}
-                      </td>
-                      <td className="px-6 py-4">
-                        <span
-                          className={`px-2 py-1 rounded text-xs uppercase font-bold ${
-                            s.status === "completed"
-                              ? "bg-green-100 text-green-700"
-                              : s.status === "abandoned"
-                              ? "bg-red-100 text-red-600"
-                              : "bg-blue-100 text-blue-700"
-                          }`}
-                        >
-                          {s.status || "waiting"}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 flex gap-2 items-center">
-                        {isWaiting && (
-                          <button
-                            onClick={() => handleKickUser(s.id)}
-                            title="Kick User"
-                            className="bg-red-50 text-red-600 p-2 rounded hover:bg-red-100 transition-colors"
-                          >
-                            <XCircle size={18} />
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {scans.map((s) => (
+                  <tr key={s.id} className="hover:bg-slate-50">
+                    <td className="px-6 py-4 font-medium">{s.locationId}</td>
+                    <td className="px-6 py-4 font-bold text-blue-600">
+                      #{formatNum(s.queueNumber)}
+                    </td>
+                    <td className="px-6 py-4">{s.userName}</td>
+                    <td className="px-6 py-4 text-sm text-slate-500">
+                      {s.timestamp
+                        ? `${formatDate(s.timestamp.toDate())} ${formatTime(
+                            s.timestamp.toDate()
+                          )}`
+                        : ""}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -1388,6 +1120,7 @@ function AdminScreen({ isReady, onBack }) {
     </div>
   );
 }
+
 // --- SCREEN 4: SCANNER ---
 function ScannerScreen({ token, locationId, isReady, user }) {
   const [status, setStatus] = useState("idle");
@@ -1396,136 +1129,14 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   const [fingerprint, setFingerprint] = useState("");
   const [userEmail, setUserEmail] = useState("");
   const [myQueueNumber, setMyQueueNumber] = useState(null);
-  const [myDocId, setMyDocId] = useState(null);
-  const [ticketTime, setTicketTime] = useState(null);
-  const [peopleAhead, setPeopleAhead] = useState(null);
-  const [isCheckedOut, setIsCheckedOut] = useState(false);
+
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [showPermissionModal, setShowPermissionModal] = useState(false);
   const [isRecovering, setIsRecovering] = useState(false);
   const [emailInput, setEmailInput] = useState("");
-  const [statusFromDB, setStatusFromDB] = useState("waiting");
 
-  // DEBUG STATE
   const [debugDist, setDebugDist] = useState(0);
   const [debugAcc, setDebugAcc] = useState(0);
-
-  // --- GEOFENCE WATCHER ---
-  useEffect(() => {
-    if (!myDocId || isCheckedOut) return;
-    if (!LOCATIONS_COORDS[locationId]) return;
-    if (!navigator.geolocation) return;
-
-    const watchId = navigator.geolocation.watchPosition(
-      async (position) => {
-        const userLat = position.coords.latitude;
-        const userLng = position.coords.longitude;
-        const accuracy = position.coords.accuracy;
-
-        setDebugAcc(Math.round(accuracy));
-
-        if (accuracy > 500) return;
-
-        const dist = haversineDistance(
-          { lat: userLat, lng: userLng },
-          LOCATIONS_COORDS[locationId]
-        );
-        setDebugDist(Math.round(dist));
-
-        // ✅ GRACE PERIOD (2 Mins)
-        let isImmune = false;
-        if (ticketTime) {
-          const ageMs = Date.now() - ticketTime.toMillis();
-          if (ageMs < 2 * 60 * 1000) {
-            isImmune = true;
-          }
-        }
-
-        // BUFFERED KICK LOGIC
-        if (!isImmune && dist - accuracy > GEOFENCE_RADIUS_METERS) {
-          if (db && myDocId) {
-            try {
-              await updateDoc(doc(db, COLLECTION_NAME, myDocId), {
-                status: "abandoned",
-              });
-              setIsCheckedOut(true);
-            } catch (e) {
-              console.error("Geofence exit fail", e);
-            }
-          }
-        }
-      },
-      (err) => console.log("Geo watch error", err),
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
-    );
-
-    // HEARTBEAT + POLLING
-    const pollInterval = setInterval(() => {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          if (db && myDocId && !isCheckedOut) {
-            updateDoc(doc(db, COLLECTION_NAME, myDocId), {
-              lastActive: serverTimestamp(),
-            });
-          }
-        },
-        (err) => console.warn("Poll Error:", err),
-        { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
-      );
-    }, 80000);
-
-    return () => {
-      navigator.geolocation.clearWatch(watchId);
-      clearInterval(pollInterval);
-    };
-  }, [myDocId, isCheckedOut, locationId, ticketTime]);
-
-  useEffect(() => {
-    // Only beep if peopleAhead is 0 AND not checked out
-    if (status === "success" && !isCheckedOut && peopleAhead === 0) {
-      const audio = new Audio(
-        "https://actions.google.com/sounds/v1/alarms/beep_short.ogg"
-      );
-      audio.play().catch((e) => console.log("Audio failed", e));
-    }
-  }, [peopleAhead, status, isCheckedOut]);
-
-  // ✅ CRITICAL FIX: PEOPLE AHEAD CALCULATION (Quota Saver)
-  useEffect(() => {
-    if (
-      status === "success" &&
-      myQueueNumber &&
-      !isCheckedOut &&
-      isReady &&
-      db
-    ) {
-      const checkQueueCount = async () => {
-        try {
-          // Tell Firebase to count people ahead of me, instead of downloading them
-          const q = query(
-            collection(db, COLLECTION_NAME),
-            where("locationId", "==", locationId),
-            where("status", "in", ["waiting", "active"]),
-            where("date", "==", getTodayStr()),
-            where("queueNumber", "<", myQueueNumber) // Only count smaller queue numbers!
-          );
-
-          const snapshot = await getCountFromServer(q);
-          setPeopleAhead(snapshot.data().count);
-        } catch (e) {
-          console.warn("Count error", e);
-        }
-      };
-
-      // Run immediately when the user checks in
-      checkQueueCount();
-
-      // Check the line quietly every 60 seconds (Costs exactly 1 Read per minute)
-      const countInterval = setInterval(checkQueueCount, 90000);
-
-      return () => clearInterval(countInterval);
-    }
-  }, [status, myQueueNumber, isCheckedOut, locationId, isReady]);
 
   const generateNativeFingerprint = async () =>
     "fp_" + Math.random().toString(36).substr(2, 9);
@@ -1610,19 +1221,17 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         };
         const targetCoords = LOCATIONS_COORDS[locationId];
 
-        // --- NEW GEOFENCE BLOCK LOGIC ---
         if (targetCoords) {
           const dist = haversineDistance(userCoords, targetCoords);
+          setDebugDist(Math.round(dist));
+          setDebugAcc(Math.round(pos.coords.accuracy));
 
-          // We subtract the GPS accuracy to give the user the benefit of the doubt
-          // if their phone's GPS is currently weak/drifting.
           if (dist - pos.coords.accuracy > GEOFENCE_RADIUS_METERS) {
             setStatus("blocked");
             setErrorMsg("You are too far from Location");
-            return; // Stop the check-in process entirely
+            return;
           }
         }
-        // --------------------------------
 
         saveCheckIn(pos.coords);
       },
@@ -1637,119 +1246,58 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   const saveCheckIn = async (coords) => {
     setStatus("saving");
     try {
-      const deviceQ = query(
+      const todayStr = getTodayStr();
+
+      // Check if user ALREADY got a ticket today at this location to prevent spam
+      const existingQ = query(
         collection(db, COLLECTION_NAME),
         where("deviceId", "==", deviceId),
-        where("status", "in", ["waiting", "active"]),
         where("locationId", "==", locationId),
-        where("date", "==", getTodayStr())
-      );
-      const deviceSnap = await getDocs(deviceQ);
-
-      let emailSnap = { docs: [] };
-      if (userEmail) {
-        const emailQ = query(
-          collection(db, COLLECTION_NAME),
-          where("userName", "==", userEmail),
-          where("status", "in", ["waiting", "active"]),
-          where("locationId", "==", locationId),
-          where("date", "==", getTodayStr())
-        );
-        emailSnap = await getDocs(emailQ);
-      }
-
-      const existingDocs = [...deviceSnap.docs, ...emailSnap.docs];
-      const uniqueDocs = existingDocs.filter(
-        (v, i, a) => a.findIndex((v2) => v2.id === v.id) === i
+        where("date", "==", todayStr)
       );
 
-      if (uniqueDocs.length > 0) {
-        const bestTicket = uniqueDocs[0];
-        const ticketData = bestTicket.data();
+      const existingSnap = await getDocs(existingQ);
 
-        // Time Calculations
-        const now = Date.now();
-        const lastActiveTime = ticketData.lastActive
-          ? ticketData.lastActive.toMillis()
-          : 0;
-        const ticketCreationTime = ticketData.timestamp
-          ? ticketData.timestamp.toMillis()
-          : 0;
-        const ticketAge = now - ticketCreationTime;
-
-        // Check if this is a Page Refresh (Safe) or New Scan
-        const isRefresh = ticketData.tokenUsed === token;
-
-        // RULE 1: HARD ABANDONMENT (> 40 mins inactive)
-        if (now - lastActiveTime > ABANDONMENT_LIMIT_MS) {
-          for (let docSnap of uniqueDocs) {
-            await updateDoc(doc(db, COLLECTION_NAME, docSnap.id), {
-              status: "abandoned",
-            });
-          }
-          // Fall through to create NEW ticket
-        }
-
-        // RULE 2: RESCAN PENALTY (< 15 mins old & New Scan)
-        else if (!isRefresh && ticketAge < RESCAN_PENALTY_MS) {
-          console.log(
-            "RESCAN PENALTY: User rescanned within 15 mins. Resetting."
-          );
-          for (let docSnap of uniqueDocs) {
-            await updateDoc(doc(db, COLLECTION_NAME, docSnap.id), {
-              status: "abandoned",
-            });
-          }
-          // Fall through to create NEW ticket
-        }
-
-        // RULE 3: RESUME (Safe Refresh OR Old Ticket Rescan)
-        else {
-          setMyQueueNumber(ticketData.queueNumber);
-          setMyDocId(bestTicket.id);
-          setTicketTime(ticketData.timestamp);
-
-          if (!isRefresh) {
-            await updateDoc(doc(db, COLLECTION_NAME, bestTicket.id), {
-              tokenUsed: token,
-              lastActive: serverTimestamp(),
-            });
-          }
-
-          setStatus("success");
-          return;
-        }
+      if (!existingSnap.empty) {
+        // User already has a ticket for today. Just show them their existing number.
+        const existingTicket = existingSnap.docs[0].data();
+        setMyQueueNumber(existingTicket.queueNumber);
+        setStatus("success");
+        return;
       }
 
-      const todayStr = getTodayStr();
+      // Generate NEW Ticket using Atomic Transaction
       const newRef = doc(collection(db, COLLECTION_NAME));
       const nowTimestamp = serverTimestamp();
 
       const qNum = await runTransaction(db, async (t) => {
         const cRef = doc(db, COUNTER_COLLECTION, locationId);
         const cSnap = await t.get(cRef);
+
         let next = 1;
-        if (cSnap.exists() && cSnap.data().date === todayStr)
+        // Automatic Midnight Reset logic:
+        if (cSnap.exists() && cSnap.data().date === todayStr) {
           next = cSnap.data().count + 1;
+        }
+
         t.set(cRef, { date: todayStr, count: next, locationId });
+
         t.set(newRef, {
           userName: userEmail,
           locationId,
           queueNumber: next,
           deviceId,
           timestamp: nowTimestamp,
-          status: "waiting",
           location: { lat: coords.latitude, lng: coords.longitude },
           tokenUsed: token,
           fingerprint,
-          lastActive: nowTimestamp,
           date: todayStr,
         });
+
         return next;
       });
+
       setMyQueueNumber(qNum);
-      setMyDocId(newRef.id);
-      setTicketTime({ toMillis: () => Date.now() });
       setStatus("success");
     } catch (e) {
       setStatus("error");
@@ -1758,85 +1306,29 @@ function ScannerScreen({ token, locationId, isReady, user }) {
   };
 
   if (status === "success") {
-    if (statusFromDB === "abandoned")
-      return (
-        <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-red-50 text-center animate-in zoom-in">
-          <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-6 text-red-600">
-            <XCircle size={32} />
-          </div>
-          <h2 className="text-xl font-bold text-red-800 mb-2">
-            You Left the Area
-          </h2>
-          <p className="text-slate-600 mb-6">
-            You must stay near the store to keep your spot.
-          </p>
-          <button
-            onClick={() => window.location.reload()}
-            className="px-6 py-3 bg-red-600 text-white rounded-xl font-bold"
-          >
-            Start Over
-          </button>
-        </div>
-      );
-    if (isCheckedOut)
-      return (
-        <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-gray-100 text-center animate-in zoom-in">
-          <div className="w-16 h-16 bg-gray-200 rounded-full flex items-center justify-center mb-6 text-gray-500">
-            <LogOut size={32} />
-          </div>
-          <h2 className="text-xl font-bold text-gray-800 mb-2">
-            You have left the queue
-          </h2>
-          <button
-            onClick={() => window.location.reload()}
-            className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold"
-          >
-            New Check In
-          </button>
-        </div>
-      );
     return (
       <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-green-50 text-center animate-in zoom-in relative">
         <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-6 text-green-600">
           <CheckCircle size={32} />
         </div>
         <h2 className="text-xl font-bold text-green-800 mb-2">
-          Check-In Successful
+          Ticket Generated
         </h2>
-        <div className="bg-white p-6 rounded-2xl shadow-lg border border-green-200 mt-4 mb-6 w-full max-w-xs">
-          <div className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-1">
-            {locationId} Ticket
+        <div className="bg-white p-8 rounded-2xl shadow-lg border border-green-200 mt-4 mb-6 w-full max-w-sm">
+          <div className="text-slate-400 text-sm font-bold uppercase tracking-widest mb-2">
+            {locationId} Entry
           </div>
-          <div className="text-6xl font-black text-slate-800">
+          <div className="text-7xl font-black text-slate-800 my-4">
             #{formatNum(myQueueNumber)}
           </div>
-          <div className="text-sm font-semibold text-blue-600 mt-2">
+          <div className="text-md font-semibold text-blue-600 mt-4 pt-4 border-t border-slate-100">
             {userEmail}
           </div>
-        </div>
-        <div className="w-full max-w-xs mb-8">
-          <div
-            className={`${
-              peopleAhead === 0 ? "bg-green-600" : "bg-blue-600"
-            } text-white p-4 rounded-xl shadow-md transition-colors`}
-          >
-            <div className="text-xs uppercase font-bold opacity-80 mb-1">
-              Users Remaining Before You
-            </div>
-            <div className="text-4xl font-bold">
-              {/* ✅ SAFE LOADING STATE */}
-              {peopleAhead === null ? (
-                <Loader className="animate-spin inline" />
-              ) : peopleAhead === 0 ? (
-                "It's your turn!"
-              ) : (
-                formatNum(peopleAhead)
-              )}
-            </div>
+          <div className="text-xs text-slate-400 mt-2">
+            {formatDate(new Date())}
           </div>
         </div>
 
-        {/* DEBUG PANEL */}
         {LOCATIONS_COORDS[locationId] && (
           <div className="absolute bottom-4 left-4 right-4 bg-black/50 text-white p-2 rounded text-[10px] font-mono pointer-events-none">
             DEBUG: Dist {debugDist}m (Limit {GEOFENCE_RADIUS_METERS}m) | Acc ±
@@ -1847,12 +1339,11 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     );
   }
 
-  // --- NEW BLOCKED UI ---
   if (status === "blocked") {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-red-50 text-center animate-in zoom-in">
         <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-6 text-red-600">
-          <XCircle size={32} />
+          <X size={32} />
         </div>
         <h2 className="text-xl font-bold text-red-800 mb-2">Access Denied</h2>
         <p className="text-slate-600 mb-6 font-medium">{errorMsg}</p>
@@ -1862,8 +1353,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         >
           Try Again
         </button>
-
-        {/* Optional: Show them exactly how far away they are for debugging */}
         {LOCATIONS_COORDS[locationId] && (
           <div className="mt-8 text-xs text-red-400 font-mono">
             Radius: {GEOFENCE_RADIUS_METERS}m
@@ -1872,7 +1361,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       </div>
     );
   }
-  // ----------------------
 
   return (
     <div className="min-h-screen bg-white p-6 flex flex-col items-center justify-center">
@@ -1907,15 +1395,15 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       )}
       {showPermissionModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-          <div className="bg-white p-6 rounded-2xl max-w-sm w-full">
-            <h3 className="text-lg font-bold mb-2">
-              Check in at {locationId}?
+          <div className="bg-white p-6 rounded-2xl max-w-sm w-full text-center">
+            <h3 className="text-xl font-bold mb-4">
+              Get Ticket for {locationId}
             </h3>
             <button
               onClick={confirmAndCheckIn}
-              className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold"
+              className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold text-lg shadow-lg hover:bg-blue-700 transition-colors"
             >
-              Allow & Check In
+              Generate Ticket
             </button>
           </div>
         </div>
@@ -1927,7 +1415,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         <p className="text-slate-500">
           {status === "idle" || status === "initializing"
             ? "Verifying..."
-            : "Saving..."}
+            : "Generating Ticket..."}
         </p>
         {errorMsg && <p className="text-red-500 mt-2">{errorMsg}</p>}
       </div>
