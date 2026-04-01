@@ -116,7 +116,8 @@ const COUNTER_COLLECTION = "counters";
 const DEVICES_COLLECTION = "registered_devices";
 const SYSTEM_COLLECTION = "system";
 
-const TOKEN_VALIDITY_SECONDS = 30;
+// Reduced to 10 seconds to combat remote scanning
+const TOKEN_VALIDITY_SECONDS = 10;
 
 const LOCATIONS = [
   "QCA1",
@@ -1226,9 +1227,35 @@ function ScannerScreen({ token, locationId, isReady, user }) {
           setDebugDist(Math.round(dist));
           setDebugAcc(Math.round(pos.coords.accuracy));
 
-          if (dist - pos.coords.accuracy > GEOFENCE_RADIUS_METERS) {
+          // 1. Enforce a strict accuracy limit
+          if (pos.coords.accuracy > 50) {
             setStatus("blocked");
-            setErrorMsg("You are too far from Location");
+            setErrorMsg(
+              `Location accuracy too low (${Math.round(
+                pos.coords.accuracy
+              )}m). Step outside or connect to Wi-Fi.`
+            );
+            return;
+          }
+
+          // 2. Pure distance check
+          if (dist > GEOFENCE_RADIUS_METERS) {
+            setStatus("blocked");
+            setErrorMsg("You are too far from the Location.");
+            return;
+          }
+
+          // 3. Heuristic Anti-Spoofing Check
+          const isSuspicious =
+            pos.coords.altitude === null &&
+            pos.coords.altitudeAccuracy === null &&
+            pos.coords.accuracy < 10;
+
+          if (isSuspicious) {
+            setStatus("blocked");
+            setErrorMsg(
+              "Suspicious location data detected. Please disable Mock Locations."
+            );
             return;
           }
         }
@@ -1239,7 +1266,8 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         setStatus("error");
         setErrorMsg("Location permission denied.");
       },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+      // Force the device to grab a fresh GPS lock rather than using cached data
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
     );
   };
 
