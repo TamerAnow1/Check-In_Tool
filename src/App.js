@@ -814,6 +814,7 @@ function AdminScreen({ isReady, onBack }) {
       const dateObj = d.timestamp ? d.timestamp.toDate() : null;
 
       let finalFraudReason = d.fraudReason || "None";
+      // Dynamic Check for API Injection (Text Strings bypassing the app)
       if (
         typeof d.location?.lat === "string" ||
         typeof d.location?.lng === "string"
@@ -828,7 +829,7 @@ function AdminScreen({ isReady, onBack }) {
         `"${formatDate(dateObj)}"`,
         `"${formatTime(dateObj)}"`,
         `"${d.deviceId || ""}"`,
-        // REVERTED to original syntax: No formulas, just raw data straight from Firebase
+        // Reverted to raw export to preserve text strings for your visibility
         d.location?.lat || "",
         d.location?.lng || "",
         d.accuracy || "",
@@ -1121,7 +1122,8 @@ function AdminScreen({ isReady, onBack }) {
                   const isApiFraud =
                     typeof s.location?.lat === "string" ||
                     typeof s.location?.lng === "string";
-                  if (isApiFraud) finalFraudReason = "FRAUD (API Injection)";
+                  if (isApiFraud)
+                    finalFraudReason = "FRAUD (API Injection / Text)";
 
                   const isFraud = finalFraudReason !== "None";
 
@@ -1259,8 +1261,13 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     setShowPermissionModal(false);
     setStatus("locating");
 
+    // Start timer for Heuristic Check
+    const requestStartTime = performance.now();
+
     navigator.geolocation.getCurrentPosition(
       (pos) => {
+        const timeToLock = performance.now() - requestStartTime;
+
         const userCoords = {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
@@ -1274,14 +1281,26 @@ function ScannerScreen({ token, locationId, isReady, user }) {
           setDebugDist(Math.round(dist));
           setDebugAcc(Math.round(pos.coords.accuracy));
 
-          if (
-            pos.coords.altitude === null &&
-            pos.coords.altitudeAccuracy === null &&
-            pos.coords.accuracy < 10
-          ) {
-            secretFraudFlag = "FRAUD (Mock GPS App)";
+          // --- OPTION 1 & 2: HEURISTIC ENTROPY CHECKS ---
+          const isAccuracySuspiciouslyPerfect = pos.coords.accuracy % 1 === 0;
+          const isDriftDead =
+            (pos.coords.speed === 0 || pos.coords.speed === null) &&
+            (pos.coords.heading === 0 || pos.coords.heading === null);
+          const isAltitudeSuspicious =
+            pos.coords.altitude !== null && pos.coords.altitude % 1 === 0;
+          const isInstaLock = timeToLock < 30; // Milliseconds
+
+          let fakePoints = 0;
+          if (isAccuracySuspiciouslyPerfect) fakePoints++;
+          if (isDriftDead) fakePoints++;
+          if (isAltitudeSuspicious) fakePoints++;
+          if (isInstaLock) fakePoints++;
+
+          if (fakePoints >= 2) {
+            secretFraudFlag = `FRAUD (Heuristics: Score ${fakePoints})`;
           }
 
+          // Real distance block (Only block if physically too far away)
           if (dist > GEOFENCE_RADIUS_METERS) {
             setStatus("blocked");
             setErrorMsg("You are too far from the Location.");
