@@ -116,7 +116,7 @@ const COUNTER_COLLECTION = "counters";
 const DEVICES_COLLECTION = "registered_devices";
 const SYSTEM_COLLECTION = "system";
 
-// Reduced to 10 seconds to combat remote scanning
+// Tightened to 10 seconds to combat remote scanning
 const TOKEN_VALIDITY_SECONDS = 10;
 
 const LOCATIONS = [
@@ -802,10 +802,18 @@ function AdminScreen({ isReady, onBack }) {
       "Device ID",
       "Latitude",
       "Longitude",
+      "Status", // ADDED FRAUD STATUS COLUMN
     ].join(",");
 
     const csvRows = data.map((d) => {
       const dateObj = d.timestamp ? d.timestamp.toDate() : null;
+
+      // Check if the database stored a string instead of a number
+      const isFraud =
+        typeof d.location?.lat === "string" ||
+        typeof d.location?.lng === "string";
+      const status = isFraud ? "FRAUD (Text GPS)" : "Valid";
+
       return [
         d.locationId,
         d.queueNumber,
@@ -815,6 +823,7 @@ function AdminScreen({ isReady, onBack }) {
         `"${d.deviceId || ""}"`,
         d.location?.lat || "",
         d.location?.lng || "",
+        status,
       ].join(",");
     });
 
@@ -1094,25 +1103,50 @@ function AdminScreen({ isReady, onBack }) {
                   <th className="px-6 py-4">Ticket #</th>
                   <th className="px-6 py-4">User</th>
                   <th className="px-6 py-4">Time</th>
+                  <th className="px-6 py-4">Status</th> {/* NEW COLUMN */}
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {scans.map((s) => (
-                  <tr key={s.id} className="hover:bg-slate-50">
-                    <td className="px-6 py-4 font-medium">{s.locationId}</td>
-                    <td className="px-6 py-4 font-bold text-blue-600">
-                      #{formatNum(s.queueNumber)}
-                    </td>
-                    <td className="px-6 py-4">{s.userName}</td>
-                    <td className="px-6 py-4 text-sm text-slate-500">
-                      {s.timestamp
-                        ? `${formatDate(s.timestamp.toDate())} ${formatTime(
-                            s.timestamp.toDate()
-                          )}`
-                        : ""}
-                    </td>
-                  </tr>
-                ))}
+                {scans.map((s) => {
+                  // Check if stored coordinates are strings
+                  const isFraud =
+                    typeof s.location?.lat === "string" ||
+                    typeof s.location?.lng === "string";
+
+                  return (
+                    <tr
+                      key={s.id}
+                      className={`hover:bg-slate-50 ${
+                        isFraud ? "bg-red-50" : ""
+                      }`}
+                    >
+                      <td className="px-6 py-4 font-medium">{s.locationId}</td>
+                      <td className="px-6 py-4 font-bold text-blue-600">
+                        #{formatNum(s.queueNumber)}
+                      </td>
+                      <td className="px-6 py-4">{s.userName}</td>
+                      <td className="px-6 py-4 text-sm text-slate-500">
+                        {s.timestamp
+                          ? `${formatDate(s.timestamp.toDate())} ${formatTime(
+                              s.timestamp.toDate()
+                            )}`
+                          : ""}
+                      </td>
+                      <td className="px-6 py-4">
+                        {/* Visual Fraud Badge */}
+                        {isFraud ? (
+                          <span className="bg-red-100 text-red-700 px-2 py-1 rounded text-xs font-bold border border-red-200">
+                            FRAUD
+                          </span>
+                        ) : (
+                          <span className="bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-bold border border-green-200">
+                            VALID
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1223,6 +1257,18 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         const targetCoords = LOCATIONS_COORDS[locationId];
 
         if (targetCoords) {
+          // ADDED: Strict Type Checking to catch Text-based Fake GPS apps immediately
+          if (
+            typeof pos.coords.latitude === "string" ||
+            typeof pos.coords.longitude === "string"
+          ) {
+            setStatus("blocked");
+            setErrorMsg(
+              "Fraudulent GPS provider detected (Data Type Mismatch). Please use standard device location."
+            );
+            return;
+          }
+
           const dist = haversineDistance(userCoords, targetCoords);
           setDebugDist(Math.round(dist));
           setDebugAcc(Math.round(pos.coords.accuracy));
