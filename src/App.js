@@ -116,7 +116,7 @@ const COUNTER_COLLECTION = "counters";
 const DEVICES_COLLECTION = "registered_devices";
 const SYSTEM_COLLECTION = "system";
 
-// Tightened to 10 seconds to combat remote scanning
+// 10 second QR refresh to prevent screen-photo sharing
 const TOKEN_VALIDITY_SECONDS = 10;
 
 const LOCATIONS = [
@@ -168,11 +168,15 @@ const getTodayStr = () => {
 
 const haversineDistance = (coords1, coords2) => {
   if (!coords1 || !coords2 || !coords1.lat || !coords2.lat) return Infinity;
+  // If a spoofer passed a string, force it to math for the distance calculation
+  const lat1_num = parseFloat(coords1.lat);
+  const lng1_num = parseFloat(coords1.lng);
+
   const toRad = (x) => (x * Math.PI) / 180;
   const R = 6371e3;
-  const dLat = toRad(coords2.lat - coords1.lat);
-  const dLon = toRad(coords2.lng - coords1.lng);
-  const lat1 = toRad(coords1.lat);
+  const dLat = toRad(coords2.lat - lat1_num);
+  const dLon = toRad(coords2.lng - lng1_num);
+  const lat1 = toRad(lat1_num);
   const lat2 = toRad(coords2.lat);
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
@@ -793,6 +797,7 @@ function AdminScreen({ isReady, onBack }) {
       (a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
     );
 
+    // HONEYPOT UPDATE: Adding explicit DataType Columns to the CSV Header
     const csvHeader = [
       "Location",
       "Ticket Number",
@@ -801,18 +806,28 @@ function AdminScreen({ isReady, onBack }) {
       "Time",
       "Device ID",
       "Latitude",
+      "Lat Type", // Tells Excel exactly if it was a String or Number
       "Longitude",
-      "Status", // ADDED FRAUD STATUS COLUMN
+      "Lng Type", // Tells Excel exactly if it was a String or Number
+      "Status",
     ].join(",");
 
     const csvRows = data.map((d) => {
       const dateObj = d.timestamp ? d.timestamp.toDate() : null;
 
-      // Check if the database stored a string instead of a number
-      const isFraud =
-        typeof d.location?.lat === "string" ||
-        typeof d.location?.lng === "string";
+      const rawLat = d.location?.lat;
+      const rawLng = d.location?.lng;
+
+      const latType = typeof rawLat;
+      const lngType = typeof rawLng;
+
+      const isFraud = latType === "string" || lngType === "string";
       const status = isFraud ? "FRAUD (Text GPS)" : "Valid";
+
+      // FORCE EXCEL FORMATTING: If it's a string, we wrap it in an Excel formula ( ="value" )
+      // This guarantees Excel won't auto-convert it to General/Number.
+      const exportLat = latType === "string" ? `="${rawLat}"` : rawLat || "";
+      const exportLng = lngType === "string" ? `="${rawLng}"` : rawLng || "";
 
       return [
         d.locationId,
@@ -821,8 +836,10 @@ function AdminScreen({ isReady, onBack }) {
         `"${formatDate(dateObj)}"`,
         `"${formatTime(dateObj)}"`,
         `"${d.deviceId || ""}"`,
-        d.location?.lat || "",
-        d.location?.lng || "",
+        exportLat,
+        latType,
+        exportLng,
+        lngType,
         status,
       ].join(",");
     });
@@ -851,7 +868,6 @@ function AdminScreen({ isReady, onBack }) {
 
       calculateStoreStats(filteredData);
 
-      // Simple sort by newest first
       filteredData.sort(
         (a, b) =>
           (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
@@ -1108,7 +1124,6 @@ function AdminScreen({ isReady, onBack }) {
               </thead>
               <tbody className="divide-y">
                 {scans.map((s) => {
-                  // Check if stored coordinates are strings
                   const isFraud =
                     typeof s.location?.lat === "string" ||
                     typeof s.location?.lng === "string";
@@ -1133,7 +1148,6 @@ function AdminScreen({ isReady, onBack }) {
                           : ""}
                       </td>
                       <td className="px-6 py-4">
-                        {/* Visual Fraud Badge */}
                         {isFraud ? (
                           <span className="bg-red-100 text-red-700 px-2 py-1 rounded text-xs font-bold border border-red-200">
                             FRAUD
@@ -1257,23 +1271,12 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         const targetCoords = LOCATIONS_COORDS[locationId];
 
         if (targetCoords) {
-          // ADDED: Strict Type Checking to catch Text-based Fake GPS apps immediately
-          if (
-            typeof pos.coords.latitude === "string" ||
-            typeof pos.coords.longitude === "string"
-          ) {
-            setStatus("blocked");
-            setErrorMsg(
-              "Fraudulent GPS provider detected (Data Type Mismatch). Please use standard device location."
-            );
-            return;
-          }
-
+          // HONEYPOT UPDATE: We REMOVED the block here.
+          // Let them submit their text-based fake GPS so you can catch them in the Admin panel.
           const dist = haversineDistance(userCoords, targetCoords);
           setDebugDist(Math.round(dist));
           setDebugAcc(Math.round(pos.coords.accuracy));
 
-          // 1. Enforce a strict accuracy limit
           if (pos.coords.accuracy > 50) {
             setStatus("blocked");
             setErrorMsg(
@@ -1284,14 +1287,12 @@ function ScannerScreen({ token, locationId, isReady, user }) {
             return;
           }
 
-          // 2. Pure distance check
           if (dist > GEOFENCE_RADIUS_METERS) {
             setStatus("blocked");
             setErrorMsg("You are too far from the Location.");
             return;
           }
 
-          // 3. Heuristic Anti-Spoofing Check
           const isSuspicious =
             pos.coords.altitude === null &&
             pos.coords.altitudeAccuracy === null &&
@@ -1312,7 +1313,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         setStatus("error");
         setErrorMsg("Location permission denied.");
       },
-      // Force the device to grab a fresh GPS lock rather than using cached data
       { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
     );
   };
@@ -1322,7 +1322,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     try {
       const todayStr = getTodayStr();
 
-      // Generate NEW Ticket using Atomic Transaction
       const newRef = doc(collection(db, COLLECTION_NAME));
       const nowTimestamp = serverTimestamp();
 
@@ -1331,7 +1330,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
         const cSnap = await t.get(cRef);
 
         let next = 1;
-        // Automatic Midnight Reset logic:
         if (cSnap.exists() && cSnap.data().date === todayStr) {
           next = cSnap.data().count + 1;
         }
@@ -1344,6 +1342,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
           queueNumber: next,
           deviceId,
           timestamp: nowTimestamp,
+          // HONEYPOT UPDATE: Removed parseFloat. Let the raw dirty string go into the database!
           location: { lat: coords.latitude, lng: coords.longitude },
           tokenUsed: token,
           fingerprint,
