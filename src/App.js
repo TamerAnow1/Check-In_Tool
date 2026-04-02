@@ -167,7 +167,6 @@ const getTodayStr = () => {
 
 const haversineDistance = (coords1, coords2) => {
   if (!coords1 || !coords2 || !coords1.lat || !coords2.lat) return Infinity;
-  // Convert safely in case string is passed
   const lat1_num = parseFloat(coords1.lat);
   const lng1_num = parseFloat(coords1.lng);
 
@@ -796,6 +795,7 @@ function AdminScreen({ isReady, onBack }) {
       (a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
     );
 
+    // HONEYPOT: Exposing Speed and Heading to detect dead environments
     const csvHeader = [
       "Location",
       "Ticket Number",
@@ -807,6 +807,8 @@ function AdminScreen({ isReady, onBack }) {
       "Longitude",
       "Accuracy (m)",
       "Altitude (m)",
+      "Speed",
+      "Heading",
       "System Flag",
     ].join(",");
 
@@ -814,7 +816,6 @@ function AdminScreen({ isReady, onBack }) {
       const dateObj = d.timestamp ? d.timestamp.toDate() : null;
 
       let finalFraudReason = d.fraudReason || "None";
-      // Dynamic Check for API Injection (Text Strings bypassing the app entirely)
       if (
         typeof d.location?.lat === "string" ||
         typeof d.location?.lng === "string"
@@ -823,6 +824,15 @@ function AdminScreen({ isReady, onBack }) {
           finalFraudReason = "API Injection (Text)";
         }
       }
+
+      // Safe extraction to show actual 0s instead of blank spaces
+      const acc =
+        d.accuracy !== undefined && d.accuracy !== null ? d.accuracy : "NULL";
+      const alt =
+        d.altitude !== undefined && d.altitude !== null ? d.altitude : "NULL";
+      const spd = d.speed !== undefined && d.speed !== null ? d.speed : "NULL";
+      const hdg =
+        d.heading !== undefined && d.heading !== null ? d.heading : "NULL";
 
       return [
         d.locationId,
@@ -833,8 +843,10 @@ function AdminScreen({ isReady, onBack }) {
         `"${d.deviceId || ""}"`,
         d.location?.lat || "",
         d.location?.lng || "",
-        d.accuracy || "",
-        d.altitude || "",
+        acc,
+        alt,
+        spd,
+        hdg,
         `"${finalFraudReason}"`,
       ].join(",");
     });
@@ -1121,7 +1133,6 @@ function AdminScreen({ isReady, onBack }) {
                 {scans.map((s) => {
                   let finalFraudReason = s.fraudReason || "None";
 
-                  // Failsafe for direct API string injectors
                   if (
                     typeof s.location?.lat === "string" ||
                     typeof s.location?.lng === "string"
@@ -1270,7 +1281,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     let readings = [];
     const requestStartTime = performance.now();
 
-    // Stream location to detect mock apps
+    // Stream location to detect mock apps that starve the provider
     const watcherId = navigator.geolocation.watchPosition(
       (pos) => {
         readings.push({
@@ -1279,12 +1290,14 @@ function ScannerScreen({ token, locationId, isReady, user }) {
           acc: pos.coords.accuracy,
           alt: pos.coords.altitude,
           altAcc: pos.coords.altitudeAccuracy,
+          speed: pos.coords.speed,
+          heading: pos.coords.heading,
           time: performance.now(),
         });
 
-        // Collect 3 samples for drift analysis
         if (readings.length >= 3) {
           navigator.geolocation.clearWatch(watcherId);
+          clearTimeout(failsafeTimeout);
           analyzeAndSave(readings, requestStartTime);
         }
       },
@@ -1295,60 +1308,64 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
     );
 
-    // Timeout failsafe
-    setTimeout(() => {
-      if (readings.length < 3) {
-        navigator.geolocation.clearWatch(watcherId);
-        if (readings.length > 0) {
-          analyzeAndSave(readings, requestStartTime);
-        } else {
-          setStatus("error");
-          setErrorMsg("Could not establish a stable GPS connection.");
-        }
+    // Timeout failsafe for starved providers (The Lexa Trick)
+    const failsafeTimeout = setTimeout(() => {
+      navigator.geolocation.clearWatch(watcherId);
+      if (readings.length > 0) {
+        analyzeAndSave(readings, requestStartTime);
+      } else {
+        setStatus("error");
+        setErrorMsg("Could not establish a stable GPS connection.");
       }
     }, 6000);
   };
 
   const analyzeAndSave = (readings, startTime) => {
     const finalPos = readings[readings.length - 1];
-    const timeToLock = readings[0].time - startTime;
-
     let fraudReasons = [];
 
-    // --- HEURISTIC 1: Check for Web Extention/API String Injection ---
-    if (typeof finalPos.lat === "string" || typeof finalPos.lng === "string") {
-      fraudReasons.push("API Injection (Text)");
+    // --- HEURISTIC 1: The Starvation Check ---
+    if (readings.length === 1) {
+      fraudReasons.push("Frozen Provider (1 update)");
     }
 
-    // --- HEURISTIC 2: Zero Drift Analysis (Lexa/Android Fake GPS Apps) ---
+    // --- HEURISTIC 2: Zero Drift Analysis ---
     if (readings.length >= 2) {
-      let totalLatDrift = 0;
-      let totalLngDrift = 0;
+      let latDrift = 0;
+      let lngDrift = 0;
 
       for (let i = 1; i < readings.length; i++) {
-        // Enforce math to check drift even if they sent a string
-        totalLatDrift += Math.abs(
+        latDrift += Math.abs(
           Number(readings[i].lat) - Number(readings[i - 1].lat)
         );
-        totalLngDrift += Math.abs(
+        lngDrift += Math.abs(
           Number(readings[i].lng) - Number(readings[i - 1].lng)
         );
       }
 
-      if (totalLatDrift === 0 && totalLngDrift === 0) {
+      if (latDrift === 0 && lngDrift === 0) {
         fraudReasons.push("Mock App (Zero Drift)");
       }
     }
 
-    // --- HEURISTIC 3: Timing & Missing Altitude (Insta-locks) ---
-    const isInstaLock = timeToLock < 50;
-    const isMissingAlt =
-      finalPos.alt === null && finalPos.altAcc === null && finalPos.acc < 20;
+    // --- HEURISTIC 3: The Dead Environment Check ---
+    // If a phone is outdoors requesting High Accuracy, it should have some noise.
+    // Fake GPS apps often report exactly 0 or perfectly null.
+    const isAltDead = finalPos.alt === null || finalPos.alt === 0;
+    const isSpeedDead = finalPos.speed === null || finalPos.speed === 0;
+    const isHeadingDead = finalPos.heading === null || finalPos.heading === 0;
 
-    if (isInstaLock && isMissingAlt) {
-      if (!fraudReasons.includes("Mock App (Zero Drift)")) {
-        fraudReasons.push("Heuristics (Insta-lock & No Alt)");
-      }
+    if (isAltDead && isSpeedDead && isHeadingDead) {
+      fraudReasons.push("Dead Environment (No Alt/Spd)");
+    }
+
+    // --- HEURISTIC 4: Hardcoded Exact Integers ---
+    if (
+      finalPos.acc !== null &&
+      finalPos.acc !== undefined &&
+      finalPos.acc % 1 === 0
+    ) {
+      fraudReasons.push(`Suspicious Accuracy (${finalPos.acc})`);
     }
 
     // --- PHYSICAL GEOFENCE CHECK ---
@@ -1365,17 +1382,17 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       }
     }
 
-    // Compile the final secret flag
     const secretFraudFlag =
       fraudReasons.length > 0 ? fraudReasons.join(" | ") : "None";
 
-    // DO NOT BLOCK. LET THEM SUCCEED SO WE CAN LOG THE FRAUD REASON.
     saveCheckIn(
       {
         latitude: finalPos.lat,
         longitude: finalPos.lng,
         accuracy: finalPos.acc,
         altitude: finalPos.alt,
+        speed: finalPos.speed,
+        heading: finalPos.heading,
       },
       secretFraudFlag
     );
@@ -1410,9 +1427,11 @@ function ScannerScreen({ token, locationId, isReady, user }) {
           tokenUsed: token,
           fingerprint,
           date: todayStr,
-          accuracy: coords.accuracy || null,
-          altitude: coords.altitude || null,
-          fraudReason: secretFraudFlag, // SILENTLY ATTACH THE EVIDENCE
+          accuracy: coords.accuracy !== undefined ? coords.accuracy : null,
+          altitude: coords.altitude !== undefined ? coords.altitude : null,
+          speed: coords.speed !== undefined ? coords.speed : null,
+          heading: coords.heading !== undefined ? coords.heading : null,
+          fraudReason: secretFraudFlag,
         });
 
         return next;
