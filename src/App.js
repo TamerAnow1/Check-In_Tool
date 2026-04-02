@@ -814,12 +814,14 @@ function AdminScreen({ isReady, onBack }) {
       const dateObj = d.timestamp ? d.timestamp.toDate() : null;
 
       let finalFraudReason = d.fraudReason || "None";
-      // Dynamic Check for API Injection (Text Strings bypassing the app)
+      // Dynamic Check for API Injection (Text Strings bypassing the app entirely)
       if (
         typeof d.location?.lat === "string" ||
         typeof d.location?.lng === "string"
       ) {
-        finalFraudReason = "FRAUD (API Injection / Text)";
+        if (finalFraudReason === "None") {
+          finalFraudReason = "API Injection (Text)";
+        }
       }
 
       return [
@@ -829,7 +831,6 @@ function AdminScreen({ isReady, onBack }) {
         `"${formatDate(dateObj)}"`,
         `"${formatTime(dateObj)}"`,
         `"${d.deviceId || ""}"`,
-        // Reverted to raw export to preserve text strings for your visibility
         d.location?.lat || "",
         d.location?.lng || "",
         d.accuracy || "",
@@ -1119,11 +1120,16 @@ function AdminScreen({ isReady, onBack }) {
               <tbody className="divide-y">
                 {scans.map((s) => {
                   let finalFraudReason = s.fraudReason || "None";
-                  const isApiFraud =
+
+                  // Failsafe for direct API string injectors
+                  if (
                     typeof s.location?.lat === "string" ||
-                    typeof s.location?.lng === "string";
-                  if (isApiFraud)
-                    finalFraudReason = "FRAUD (API Injection / Text)";
+                    typeof s.location?.lng === "string"
+                  ) {
+                    if (finalFraudReason === "None") {
+                      finalFraudReason = "API Injection (Text)";
+                    }
+                  }
 
                   const isFraud = finalFraudReason !== "None";
 
@@ -1261,60 +1267,117 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     setShowPermissionModal(false);
     setStatus("locating");
 
-    // Start timer for Heuristic Check
+    let readings = [];
     const requestStartTime = performance.now();
 
-    navigator.geolocation.getCurrentPosition(
+    // Stream location to detect mock apps
+    const watcherId = navigator.geolocation.watchPosition(
       (pos) => {
-        const timeToLock = performance.now() - requestStartTime;
-
-        const userCoords = {
+        readings.push({
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
-        };
-        const targetCoords = LOCATIONS_COORDS[locationId];
+          acc: pos.coords.accuracy,
+          alt: pos.coords.altitude,
+          altAcc: pos.coords.altitudeAccuracy,
+          time: performance.now(),
+        });
 
-        let secretFraudFlag = "None";
-
-        if (targetCoords) {
-          const dist = haversineDistance(userCoords, targetCoords);
-          setDebugDist(Math.round(dist));
-          setDebugAcc(Math.round(pos.coords.accuracy));
-
-          // --- OPTION 1 & 2: HEURISTIC ENTROPY CHECKS ---
-          const isAccuracySuspiciouslyPerfect = pos.coords.accuracy % 1 === 0;
-          const isDriftDead =
-            (pos.coords.speed === 0 || pos.coords.speed === null) &&
-            (pos.coords.heading === 0 || pos.coords.heading === null);
-          const isAltitudeSuspicious =
-            pos.coords.altitude !== null && pos.coords.altitude % 1 === 0;
-          const isInstaLock = timeToLock < 30; // Milliseconds
-
-          let fakePoints = 0;
-          if (isAccuracySuspiciouslyPerfect) fakePoints++;
-          if (isDriftDead) fakePoints++;
-          if (isAltitudeSuspicious) fakePoints++;
-          if (isInstaLock) fakePoints++;
-
-          if (fakePoints >= 2) {
-            secretFraudFlag = `FRAUD (Heuristics: Score ${fakePoints})`;
-          }
-
-          // Real distance block (Only block if physically too far away)
-          if (dist > GEOFENCE_RADIUS_METERS) {
-            setStatus("blocked");
-            setErrorMsg("You are too far from the Location.");
-            return;
-          }
+        // Collect 3 samples for drift analysis
+        if (readings.length >= 3) {
+          navigator.geolocation.clearWatch(watcherId);
+          analyzeAndSave(readings, requestStartTime);
         }
-
-        saveCheckIn(pos.coords, secretFraudFlag);
       },
       (err) => {
         setStatus("error");
         setErrorMsg("Location permission denied.");
       },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+    );
+
+    // Timeout failsafe
+    setTimeout(() => {
+      if (readings.length < 3) {
+        navigator.geolocation.clearWatch(watcherId);
+        if (readings.length > 0) {
+          analyzeAndSave(readings, requestStartTime);
+        } else {
+          setStatus("error");
+          setErrorMsg("Could not establish a stable GPS connection.");
+        }
+      }
+    }, 6000);
+  };
+
+  const analyzeAndSave = (readings, startTime) => {
+    const finalPos = readings[readings.length - 1];
+    const timeToLock = readings[0].time - startTime;
+
+    let fraudReasons = [];
+
+    // --- HEURISTIC 1: Check for Web Extention/API String Injection ---
+    if (typeof finalPos.lat === "string" || typeof finalPos.lng === "string") {
+      fraudReasons.push("API Injection (Text)");
+    }
+
+    // --- HEURISTIC 2: Zero Drift Analysis (Lexa/Android Fake GPS Apps) ---
+    if (readings.length >= 2) {
+      let totalLatDrift = 0;
+      let totalLngDrift = 0;
+
+      for (let i = 1; i < readings.length; i++) {
+        // Enforce math to check drift even if they sent a string
+        totalLatDrift += Math.abs(
+          Number(readings[i].lat) - Number(readings[i - 1].lat)
+        );
+        totalLngDrift += Math.abs(
+          Number(readings[i].lng) - Number(readings[i - 1].lng)
+        );
+      }
+
+      if (totalLatDrift === 0 && totalLngDrift === 0) {
+        fraudReasons.push("Mock App (Zero Drift)");
+      }
+    }
+
+    // --- HEURISTIC 3: Timing & Missing Altitude (Insta-locks) ---
+    const isInstaLock = timeToLock < 50;
+    const isMissingAlt =
+      finalPos.alt === null && finalPos.altAcc === null && finalPos.acc < 20;
+
+    if (isInstaLock && isMissingAlt) {
+      if (!fraudReasons.includes("Mock App (Zero Drift)")) {
+        fraudReasons.push("Heuristics (Insta-lock & No Alt)");
+      }
+    }
+
+    // --- PHYSICAL GEOFENCE CHECK ---
+    const userCoords = { lat: finalPos.lat, lng: finalPos.lng };
+    const targetCoords = LOCATIONS_COORDS[locationId];
+
+    if (targetCoords) {
+      const dist = haversineDistance(userCoords, targetCoords);
+      setDebugDist(Math.round(dist));
+      setDebugAcc(Math.round(finalPos.acc));
+
+      if (dist > GEOFENCE_RADIUS_METERS) {
+        fraudReasons.push(`Out of Bounds (${Math.round(dist)}m)`);
+      }
+    }
+
+    // Compile the final secret flag
+    const secretFraudFlag =
+      fraudReasons.length > 0 ? fraudReasons.join(" | ") : "None";
+
+    // DO NOT BLOCK. LET THEM SUCCEED SO WE CAN LOG THE FRAUD REASON.
+    saveCheckIn(
+      {
+        latitude: finalPos.lat,
+        longitude: finalPos.lng,
+        accuracy: finalPos.acc,
+        altitude: finalPos.alt,
+      },
+      secretFraudFlag
     );
   };
 
@@ -1349,7 +1412,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
           date: todayStr,
           accuracy: coords.accuracy || null,
           altitude: coords.altitude || null,
-          fraudReason: secretFraudFlag,
+          fraudReason: secretFraudFlag, // SILENTLY ATTACH THE EVIDENCE
         });
 
         return next;
