@@ -533,7 +533,6 @@ function KioskScreen({ isReady, locationId }) {
   useEffect(() => {
     if (!isReady || !db) return;
 
-    // Get today's recent scans for this location
     const safeQ = query(
       collection(db, COLLECTION_NAME),
       where("locationId", "==", locationId),
@@ -549,7 +548,7 @@ function KioskScreen({ isReady, locationId }) {
         (a, b) =>
           (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
       );
-      setRecentScans(allScans.slice(0, 6)); // Display last 6 tickets
+      setRecentScans(allScans.slice(0, 6));
     });
     return () => unsubscribe();
   }, [isReady, locationId]);
@@ -795,7 +794,6 @@ function AdminScreen({ isReady, onBack }) {
       (a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)
     );
 
-    // HONEYPOT: Exposing Speed and Heading to detect dead environments
     const csvHeader = [
       "Location",
       "Ticket Number",
@@ -816,16 +814,20 @@ function AdminScreen({ isReady, onBack }) {
       const dateObj = d.timestamp ? d.timestamp.toDate() : null;
 
       let finalFraudReason = d.fraudReason || "None";
-      if (
+
+      // ADMIN RETROACTIVE CHECK: Identifies API Injectors who bypassed the web app entirely
+      const isApiFraudText =
         typeof d.location?.lat === "string" ||
-        typeof d.location?.lng === "string"
-      ) {
-        if (finalFraudReason === "None") {
-          finalFraudReason = "API Injection (Text)";
-        }
+        typeof d.location?.lng === "string";
+      const isApiFraudMissingData =
+        d.accuracy === undefined || d.accuracy === null;
+
+      if (isApiFraudText) {
+        finalFraudReason = "FRAUD (API: Text Payload)";
+      } else if (isApiFraudMissingData && finalFraudReason === "None") {
+        finalFraudReason = "FRAUD (API: Missing Core Data)";
       }
 
-      // Safe extraction to show actual 0s instead of blank spaces
       const acc =
         d.accuracy !== undefined && d.accuracy !== null ? d.accuracy : "NULL";
       const alt =
@@ -1133,13 +1135,19 @@ function AdminScreen({ isReady, onBack }) {
                 {scans.map((s) => {
                   let finalFraudReason = s.fraudReason || "None";
 
-                  if (
+                  const isApiFraudText =
                     typeof s.location?.lat === "string" ||
-                    typeof s.location?.lng === "string"
+                    typeof s.location?.lng === "string";
+                  const isApiFraudMissingData =
+                    s.accuracy === undefined || s.accuracy === null;
+
+                  if (isApiFraudText) {
+                    finalFraudReason = "FRAUD (API: Text Payload)";
+                  } else if (
+                    isApiFraudMissingData &&
+                    finalFraudReason === "None"
                   ) {
-                    if (finalFraudReason === "None") {
-                      finalFraudReason = "API Injection (Text)";
-                    }
+                    finalFraudReason = "FRAUD (API: Missing Core Data)";
                   }
 
                   const isFraud = finalFraudReason !== "None";
@@ -1281,7 +1289,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     let readings = [];
     const requestStartTime = performance.now();
 
-    // Stream location to detect mock apps that starve the provider
     const watcherId = navigator.geolocation.watchPosition(
       (pos) => {
         readings.push({
@@ -1308,7 +1315,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
     );
 
-    // Timeout failsafe for starved providers (The Lexa Trick)
     const failsafeTimeout = setTimeout(() => {
       navigator.geolocation.clearWatch(watcherId);
       if (readings.length > 0) {
@@ -1324,12 +1330,10 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     const finalPos = readings[readings.length - 1];
     let fraudReasons = [];
 
-    // --- HEURISTIC 1: The Starvation Check ---
     if (readings.length === 1) {
       fraudReasons.push("Frozen Provider (1 update)");
     }
 
-    // --- HEURISTIC 2: Zero Drift Analysis ---
     if (readings.length >= 2) {
       let latDrift = 0;
       let lngDrift = 0;
@@ -1348,9 +1352,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       }
     }
 
-    // --- HEURISTIC 3: The Dead Environment Check ---
-    // If a phone is outdoors requesting High Accuracy, it should have some noise.
-    // Fake GPS apps often report exactly 0 or perfectly null.
     const isAltDead = finalPos.alt === null || finalPos.alt === 0;
     const isSpeedDead = finalPos.speed === null || finalPos.speed === 0;
     const isHeadingDead = finalPos.heading === null || finalPos.heading === 0;
@@ -1359,7 +1360,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       fraudReasons.push("Dead Environment (No Alt/Spd)");
     }
 
-    // --- HEURISTIC 4: Hardcoded Exact Integers ---
     if (
       finalPos.acc !== null &&
       finalPos.acc !== undefined &&
@@ -1368,7 +1368,6 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       fraudReasons.push(`Suspicious Accuracy (${finalPos.acc})`);
     }
 
-    // --- PHYSICAL GEOFENCE CHECK ---
     const userCoords = { lat: finalPos.lat, lng: finalPos.lng };
     const targetCoords = LOCATIONS_COORDS[locationId];
 
