@@ -99,7 +99,7 @@ const LOCATIONS_COORDS = {
   QCC1: { lat: 30.0605, lng: 31.40844 },
   QCC2: { lat: 30.0132757392, lng: 31.5177883952 },
   QCC4: { lat: 30.013314, lng: 31.29382 },
-  QCC6: { lat: 30.111052, lng: 31.262340 },
+  QCC6: { lat: 30.111052, lng: 31.26234 },
   QCC7: { lat: 29.99974, lng: 31.17724 },
   QCC8: { lat: 30.29634409162722, lng: 31.745815026564205 },
 
@@ -1330,6 +1330,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     const finalPos = readings[readings.length - 1];
     let fraudReasons = [];
 
+    // --- 1. CAPTURE FRAUD FLAGS (Does NOT block the user) ---
     if (readings.length === 1) {
       fraudReasons.push("Frozen Provider (1 update)");
     }
@@ -1368,6 +1369,7 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       fraudReasons.push(`Suspicious Accuracy (${finalPos.acc})`);
     }
 
+    // --- 2. CALCULATE DISTANCE AND APPLY THE HARD BLOCK ---
     const userCoords = { lat: finalPos.lat, lng: finalPos.lng };
     const targetCoords = LOCATIONS_COORDS[locationId];
 
@@ -1376,11 +1378,21 @@ function ScannerScreen({ token, locationId, isReady, user }) {
       setDebugDist(Math.round(dist));
       setDebugAcc(Math.round(finalPos.acc));
 
+      // THIS is the only condition that stops the ticket generation
       if (dist > GEOFENCE_RADIUS_METERS) {
-        fraudReasons.push(`Out of Bounds (${Math.round(dist)}m)`);
+        setStatus("blocked");
+        setErrorMsg(
+          `Location out of bounds. You are ${Math.round(
+            dist
+          )}m away from the station.`
+        );
+        return; // Aborts execution here
       }
     }
 
+    // --- 3. GENERATE TICKET & SAVE LOGS SILENTLY ---
+    // If they made it past the distance check, we save their check-in
+    // along with any fraud flags we collected in step 1.
     const secretFraudFlag =
       fraudReasons.length > 0 ? fraudReasons.join(" | ") : "None";
 
