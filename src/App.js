@@ -82,7 +82,7 @@ const firebaseConfig = {
 const GEOFENCE_RADIUS_METERS = 200;
 
 const LOCATIONS_COORDS = {
-  QJA4: { lat: 21.5611881, lng: 39.2001502 },
+  QJA4: { lat: 21.561403, lng: 39.20266 },
   QCA1: { lat: 30.045325, lng: 31.467408 },
   QCA2: { lat: 30.11777, lng: 31.35576 },
   QCA3: { lat: 30.083269, lng: 31.334888 },
