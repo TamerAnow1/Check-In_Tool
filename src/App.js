@@ -110,6 +110,8 @@ const LOCATIONS_COORDS = {
   QCD4: { lat: 29.966261, lng: 31.091331 },
   QCD5: { lat: 29.928994, lng: 31.039205 },
   QCD6: { lat: 29.99419, lng: 31.1436 },
+
+  QCG4: { lat: 31.277765, lng: 30.021814 },
 };
 
 const COLLECTION_NAME = "checkins";
@@ -145,6 +147,7 @@ const LOCATIONS = [
   "QCD4",
   "QCD5",
   "QCD6",
+  "QCG4",
 ];
 
 let app = null;
