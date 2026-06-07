@@ -279,7 +279,6 @@ const LOCATIONS_BY_COUNTRY = {
     "QRC5",
     "QRC6",
     "QRC8",
-    "QJA4",
   ],
 };
 
