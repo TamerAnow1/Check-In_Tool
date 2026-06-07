@@ -82,7 +82,6 @@ const firebaseConfig = {
 const GEOFENCE_RADIUS_METERS = 200;
 
 const LOCATIONS_COORDS = {
-  QJA4: { lat: 21.561403, lng: 39.20266 },
   QCA1: { lat: 30.045325, lng: 31.467408 },
   QCA2: { lat: 30.11777, lng: 31.35576 },
   QCA3: { lat: 30.083269, lng: 31.334888 },
@@ -110,8 +109,58 @@ const LOCATIONS_COORDS = {
   QCD4: { lat: 29.966261, lng: 31.091331 },
   QCD5: { lat: 29.928994, lng: 31.039205 },
   QCD6: { lat: 29.984024, lng: 31.153811 },
-
+  QCD7: { lat: 30.976217, lng: 28.725807 },
   QCG4: { lat: 31.277765, lng: 30.021814 },
+
+  QJA1: { lat: 21.627382, lng: 39.151599 },
+  QJA2: { lat: 21.751179, lng: 39.091419 },
+  QJA3: { lat: 21.767655, lng: 39.221437 },
+  QJA4: { lat: 21.561181, lng: 39.202695 },
+  QJA5: { lat: 21.51435, lng: 39.239402 },
+  QJA6: { lat: 21.5587642, lng: 39.1397373 },
+  QJA7: { lat: 21.6054702, lng: 39.2139594 },
+  QJA8: { lat: 24.6627793, lng: 46.7290244 },
+  QJA9: { lat: 24.5654125, lng: 46.5742656 },
+  QJB1: { lat: 26.369675, lng: 50.08049 },
+  QJB2: { lat: 26.289926, lng: 50.206823 },
+  QJB4: { lat: 26.571775, lng: 50.030168 },
+  QJC1: { lat: 21.510517, lng: 39.174904 },
+  QJC2: { lat: 27.159074, lng: 49.537266 },
+  QJC3: { lat: 26.989296, lng: 49.652698 },
+  QMA3: { lat: 25.421141, lng: 49.574544 },
+  QMA4: { lat: 26.422253, lng: 50.024733 },
+  QMA7: { lat: 26.568474, lng: 50.01031 },
+  QMB1: { lat: 26.359914, lng: 50.190176 },
+  QMB2: { lat: 24.427582, lng: 39.602166 },
+  QMB3: { lat: 26.345353, lng: 50.146238 },
+  QMB4: { lat: 24.47281, lng: 39.648824 },
+  QMB5: { lat: 24.451206, lng: 39.520927 },
+  QMK1: { lat: 21.383954, lng: 39.795048 },
+  QMK2: { lat: 26.454096, lng: 50.08086 },
+  QMK3: { lat: 21.473819, lng: 39.937491 },
+  QMK4: { lat: 21.6956971900161, lng: 39.1087947903251 },
+  QMK5: { lat: 21.28933, lng: 40.42242 },
+  QMK6: { lat: 25.359105, lng: 49.590758 },
+  QRA1: { lat: 24.8674128149778, lng: 46.667244555818 },
+  QRA3: { lat: 24.715209, lng: 46.679469 },
+  QRA4: { lat: 24.7994853, lng: 46.75916 },
+  QRA5: { lat: 24.7254721, lng: 46.82759 },
+  QRA6: { lat: 24.689904, lng: 46.760875 },
+  QRA7: { lat: 24.849349, lng: 46.789671 },
+  QRA8: { lat: 24.633935, lng: 46.554917 },
+  QRA9: { lat: 24.5901530943136, lng: 46.6659386 },
+  QRB1: { lat: 24.824507, lng: 46.662041 },
+  QRB3: { lat: 24.7637066, lng: 46.6977941 },
+  QRB4: { lat: 24.809647, lng: 46.619878 },
+  QRB5: { lat: 24.7277687, lng: 46.6434567 },
+  QRB6: { lat: 24.7277382, lng: 46.6432104 },
+  QRB7: { lat: 24.777855, lng: 46.784659 },
+  QRB8: { lat: 24.7516475, lng: 46.7708005 },
+  QRC1: { lat: 24.691388, lng: 46.707374 },
+  QRC3: { lat: 24.7848062, lng: 46.6832742 },
+  QRC5: { lat: 26.3272222, lng: 43.9926944 },
+  QRC6: { lat: 26.402297, lng: 43.93645 },
+  QRC8: { lat: 24.549802, lng: 46.672528 },
 };
 
 const COLLECTION_NAME = "checkins";
@@ -122,7 +171,6 @@ const SYSTEM_COLLECTION = "system";
 const TOKEN_VALIDITY_SECONDS = 10;
 
 const LOCATIONS = [
-  "QJA4",
   "QCA1",
   "QCA2",
   "QCA3",
@@ -147,8 +195,93 @@ const LOCATIONS = [
   "QCD4",
   "QCD5",
   "QCD6",
+  "QCD7",
   "QCG4",
 ];
+
+// --- REGION SEGREGATION MAP ---
+const LOCATIONS_BY_COUNTRY = {
+  EGY: [
+    "QCA1",
+    "QCA2",
+    "QCA3",
+    "QCA4",
+    "QCA5",
+    "QCA6",
+    "QCA7",
+    "QCA8",
+    "QGA1",
+    "QGA2",
+    "QGA3",
+    "QGA4",
+    "QCC1",
+    "QCC2",
+    "QCC4",
+    "QCC6",
+    "QCC7",
+    "QCC8",
+    "QCD1",
+    "QCD2",
+    "QCD3",
+    "QCD4",
+    "QCD5",
+    "QCD6",
+    "QCD7",
+    "QCG4",
+  ],
+  KSA: [
+    "QJA1",
+    "QJA2",
+    "QJA3",
+    "QJA4",
+    "QJA5",
+    "QJA6",
+    "QJA7",
+    "QJA8",
+    "QJA9",
+    "QJB1",
+    "QJB2",
+    "QJB4",
+    "QJC1",
+    "QJC2",
+    "QJC3",
+    "QMA3",
+    "QMA4",
+    "QMA7",
+    "QMB1",
+    "QMB2",
+    "QMB3",
+    "QMB4",
+    "QMB5",
+    "QMK1",
+    "QMK2",
+    "QMK3",
+    "QMK4",
+    "QMK5",
+    "QMK6",
+    "QRA1",
+    "QRA3",
+    "QRA4",
+    "QRA5",
+    "QRA6",
+    "QRA7",
+    "QRA8",
+    "QRA9",
+    "QRB1",
+    "QRB3",
+    "QRB4",
+    "QRB5",
+    "QRB6",
+    "QRB7",
+    "QRB8",
+    "QRC1",
+    "QRC3",
+    "QRC5",
+    "QRC6",
+    "QRC8",
+    "QJA4",
+  ],
+};
 
 let app = null;
 let db = null;
@@ -308,6 +441,7 @@ function MainApp() {
 
 // --- SCREEN 1: LANDING ---
 function LandingScreen({ onSelect }) {
+  const [selectedCountry, setSelectedCountry] = useState("EGY");
   const [selectedLoc, setSelectedLoc] = useState("QCA1");
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
@@ -320,6 +454,14 @@ function LandingScreen({ onSelect }) {
     document.addEventListener("click", closeDropdown);
     return () => document.removeEventListener("click", closeDropdown);
   }, []);
+
+  // Auto-select the first available location when the user switches regions
+  useEffect(() => {
+    const currentValidLocations = LOCATIONS_BY_COUNTRY[selectedCountry];
+    if (!currentValidLocations.includes(selectedLoc)) {
+      setSelectedLoc(currentValidLocations[0]);
+    }
+  }, [selectedCountry, selectedLoc]);
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen p-6 text-center space-y-8 bg-slate-50 animate-in fade-in duration-700">
@@ -341,6 +483,33 @@ function LandingScreen({ onSelect }) {
             </div>
           </div>
           <div className="mt-4">
+            {/* --- REGION SEGREGATION TABS --- */}
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+              Select Region
+            </label>
+            <div className="flex gap-2 mt-1 mb-4">
+              <button
+                onClick={() => setSelectedCountry("EGY")}
+                className={`flex-1 py-2 rounded-lg text-sm font-bold transition-colors ${
+                  selectedCountry === "EGY"
+                    ? "bg-slate-800 text-white"
+                    : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                }`}
+              >
+                Egypt
+              </button>
+              <button
+                onClick={() => setSelectedCountry("KSA")}
+                className={`flex-1 py-2 rounded-lg text-sm font-bold transition-colors ${
+                  selectedCountry === "KSA"
+                    ? "bg-slate-800 text-white"
+                    : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                }`}
+              >
+                Saudi Arabia
+              </button>
+            </div>
+
             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
               Select Location
             </label>
@@ -357,7 +526,8 @@ function LandingScreen({ onSelect }) {
                 </div>
                 {isDropdownOpen && (
                   <div className="absolute top-full left-0 mt-1 w-full max-h-60 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-xl z-50 p-1">
-                    {LOCATIONS.map((loc) => (
+                    {/* Maps ONLY over the locations in the selected country */}
+                    {LOCATIONS_BY_COUNTRY[selectedCountry].map((loc) => (
                       <div
                         key={loc}
                         onClick={() => {
@@ -401,7 +571,6 @@ function LandingScreen({ onSelect }) {
     </div>
   );
 }
-
 // --- SCREEN 2: KIOSK ---
 function KioskScreen({ isReady, locationId }) {
   const [token, setToken] = useState("");
@@ -678,8 +847,10 @@ function KioskScreen({ isReady, locationId }) {
 }
 
 // --- SCREEN 3: ADMIN DASHBOARD ---
+// --- SCREEN 3: ADMIN DASHBOARD ---
 function AdminScreen({ isReady, onBack }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [adminRegion, setAdminRegion] = useState(null); // Tracks the logged-in region
   const [passwordInput, setPasswordInput] = useState("");
   const [authError, setAuthError] = useState("");
 
@@ -709,8 +880,15 @@ function AdminScreen({ isReady, onBack }) {
 
   const handleLogin = (e) => {
     e.preventDefault();
-    if (passwordInput === "Anowforthewin") setIsAuthenticated(true);
-    else setAuthError("Incorrect Password");
+    if (passwordInput === "Anowforthewin") {
+      setAdminRegion("EGY");
+      setIsAuthenticated(true);
+    } else if (passwordInput === "KSAforthewin") {
+      setAdminRegion("KSA");
+      setIsAuthenticated(true);
+    } else {
+      setAuthError("Incorrect Password");
+    }
   };
 
   const handleRemoteRefresh = async () => {
@@ -757,6 +935,10 @@ function AdminScreen({ isReady, onBack }) {
       return docMinutes >= startMinutes && docMinutes <= endMinutes;
     });
 
+    // Enforce Region Isolation before applying manual location filters
+    const validRegionLocations = LOCATIONS_BY_COUNTRY[adminRegion] || [];
+    data = data.filter((d) => validRegionLocations.includes(d.locationId));
+
     if (selectedLocations.length > 0) {
       data = data.filter((d) => selectedLocations.includes(d.locationId));
     }
@@ -772,7 +954,9 @@ function AdminScreen({ isReady, onBack }) {
 
   const calculateStoreStats = (filteredData) => {
     const stats = {};
-    LOCATIONS.forEach((loc) => {
+    const validRegionLocations = LOCATIONS_BY_COUNTRY[adminRegion] || [];
+
+    validRegionLocations.forEach((loc) => {
       stats[loc] = { total: 0 };
     });
     filteredData.forEach((d) => {
@@ -820,7 +1004,6 @@ function AdminScreen({ isReady, onBack }) {
 
       let finalFraudReason = d.fraudReason || "None";
 
-      // ADMIN RETROACTIVE CHECK: Identifies API Injectors who bypassed the web app entirely
       const isApiFraudText =
         typeof d.location?.lat === "string" ||
         typeof d.location?.lng === "string";
@@ -863,7 +1046,7 @@ function AdminScreen({ isReady, onBack }) {
     a.href = window.URL.createObjectURL(
       new Blob([csvContent], { type: "text/csv" })
     );
-    a.download = `Report_${startDate}_to_${endDate}.csv`;
+    a.download = `${adminRegion}_Report_${startDate}_to_${endDate}.csv`;
     a.click();
   };
 
@@ -899,6 +1082,7 @@ function AdminScreen({ isReady, onBack }) {
     endDate,
     isAuthenticated,
     refreshTrigger,
+    adminRegion,
   ]);
 
   if (!isAuthenticated)
@@ -938,6 +1122,8 @@ function AdminScreen({ isReady, onBack }) {
       </div>
     );
 
+  const regionLocations = LOCATIONS_BY_COUNTRY[adminRegion] || [];
+
   return (
     <div className="min-h-screen bg-slate-100 p-6">
       <div className="max-w-7xl mx-auto">
@@ -949,7 +1135,7 @@ function AdminScreen({ isReady, onBack }) {
           >
             <X size={20} />
           </button>
-          <h1 className="text-2xl font-bold">Admin Dashboard</h1>
+          <h1 className="text-2xl font-bold">{adminRegion} Admin Dashboard</h1>
         </div>
 
         {/* Toolbar */}
@@ -1053,7 +1239,7 @@ function AdminScreen({ isReady, onBack }) {
                     All Stores
                   </div>
                   <div className="h-px bg-slate-100 my-1"></div>
-                  {LOCATIONS.map((loc) => (
+                  {regionLocations.map((loc) => (
                     <div
                       key={loc}
                       onClick={() => toggleLocationSelection(loc)}
@@ -1091,7 +1277,7 @@ function AdminScreen({ isReady, onBack }) {
 
         {/* Stats Grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-8">
-          {LOCATIONS.map((loc) => {
+          {regionLocations.map((loc) => {
             if (
               selectedLocations.length > 0 &&
               !selectedLocations.includes(loc)
@@ -1198,7 +1384,6 @@ function AdminScreen({ isReady, onBack }) {
     </div>
   );
 }
-
 // --- SCREEN 4: SCANNER ---
 function ScannerScreen({ token, locationId, isReady, user }) {
   const [status, setStatus] = useState("idle");
@@ -1378,21 +1563,28 @@ function ScannerScreen({ token, locationId, isReady, user }) {
     const userCoords = { lat: finalPos.lat, lng: finalPos.lng };
     const targetCoords = LOCATIONS_COORDS[locationId];
 
-    if (targetCoords) {
-      const dist = haversineDistance(userCoords, targetCoords);
-      setDebugDist(Math.round(dist));
-      setDebugAcc(Math.round(finalPos.acc));
+    // FAIL-SECURE FIX: If coordinates are missing from the system, deny entry immediately.
+    if (!targetCoords) {
+      setStatus("blocked");
+      setErrorMsg(
+        `System Error: Coordinates not configured for station ${locationId}.`
+      );
+      return;
+    }
 
-      // THIS is the only condition that stops the ticket generation
-      if (dist > GEOFENCE_RADIUS_METERS) {
-        setStatus("blocked");
-        setErrorMsg(
-          `Location out of bounds. You are ${Math.round(
-            dist
-          )}m away from the station.`
-        );
-        return; // Aborts execution here
-      }
+    const dist = haversineDistance(userCoords, targetCoords);
+    setDebugDist(Math.round(dist));
+    setDebugAcc(Math.round(finalPos.acc));
+
+    // THIS is the only condition that stops the ticket generation
+    if (dist > GEOFENCE_RADIUS_METERS) {
+      setStatus("blocked");
+      setErrorMsg(
+        `Location out of bounds. You are ${Math.round(
+          dist
+        )}m away from the station.`
+      );
+      return; // Aborts execution here
     }
 
     // --- 3. GENERATE TICKET & SAVE LOGS SILENTLY ---
