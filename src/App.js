@@ -111,6 +111,7 @@ const LOCATIONS_COORDS = {
   QCD6: { lat: 29.984024, lng: 31.153811 },
   QCD7: { lat: 30.976217, lng: 28.725807 },
   QCG4: { lat: 31.277765, lng: 30.021814 },
+  QCD9: { lat: 30.813433, lng: 29.103004 },
 
   QJA1: { lat: 21.627382, lng: 39.151599 },
   QJA2: { lat: 21.751179, lng: 39.091419 },
@@ -197,6 +198,7 @@ const LOCATIONS = [
   "QCD6",
   "QCD7",
   "QCG4",
+  "QCD9",
 ];
 
 // --- REGION SEGREGATION MAP ---
@@ -228,6 +230,7 @@ const LOCATIONS_BY_COUNTRY = {
     "QCD6",
     "QCD7",
     "QCG4",
+    "QCD9",
   ],
   KSA: [
     "QJA1",
