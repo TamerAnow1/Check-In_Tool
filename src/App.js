@@ -200,8 +200,11 @@ const LOCATIONS = [
   "QCD5",
   "QCD6",
   "QCD7",
-  "QCG4",
+  "QCD8",
   "QCD9",
+  "QCE1",
+  "QCE2",
+  "QCG4",
 ];
 
 // --- REGION SEGREGATION MAP ---
@@ -230,10 +233,12 @@ const LOCATIONS_BY_COUNTRY = {
     "QCD3",
     "QCD4",
     "QCD5",
-    "QCD6",
     "QCD7",
-    "QCG4",
+    "QCD8",
     "QCD9",
+    "QCE1",
+    "QCE2",
+    "QCG4",
   ],
   KSA: [
     "QJA1",
