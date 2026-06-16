@@ -233,6 +233,7 @@ const LOCATIONS_BY_COUNTRY = {
     "QCD3",
     "QCD4",
     "QCD5",
+    "QCD6",
     "QCD7",
     "QCD8",
     "QCD9",
